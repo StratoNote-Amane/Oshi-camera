@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>推しカメラ - 開発者モード(PC)</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="dev.css">
+</head>
+<body class="dev-mode">
+
+<!-- 3D表示エリア(カメラ映像なし、マウスで自由に見回せる) -->
+<div id="dev-viewport">
+  <canvas id="three-canvas"></canvas>
+  <div id="dev-bg-image"></div>
+</div>
+
+<div id="loading-overlay">
+  <div class="loading-spinner"></div>
+  <div id="loading-text">推しを読み込み中…</div>
+</div>
+
+<!-- 左上：タイトルと操作方法 -->
+<div id="dev-header">
+  <h1>推しカメラ 開発者モード</h1>
+  <p>カメラなし・仮想空間でポーズ/表情を確認・調整できます（PCのブラウザ向け）</p>
+  <p class="dev-controls-hint">左ドラッグ: 回転　右ドラッグ: 平行移動　ホイール: ズーム</p>
+</div>
+
+<!-- 右上：ビュー操作 -->
+<div id="dev-view-tools">
+  <button id="dev-reset-view-btn" class="dev-btn">視点をリセット</button>
+  <button id="dev-grid-btn" class="dev-btn">床グリッド: ON</button>
+  <label class="dev-btn dev-file-btn">
+    背景画像を読み込む
+    <input type="file" id="dev-bg-input" accept="image/*">
+  </label>
+  <button id="dev-bg-clear-btn" class="dev-btn">背景をクリア</button>
+  <button id="dev-screenshot-btn" class="dev-btn primary">画像として保存</button>
+</div>
+
+<!-- 下部：ポーズ/表情バー -->
+<div id="dev-bottom-bar">
+  <div id="pose-bar"></div>
+  <div id="expression-bar"></div>
+</div>
+
+<!-- 右側：ポーズ調整パネル(常時表示、PCなので折りたたまない) -->
+<div id="dev-tune-panel">
+  <div class="pose-panel-head"><span>ポーズ調整</span></div>
+  <div class="pose-panel-row">
+    <label>ボーン</label>
+    <select id="tune-bone-select"></select>
+  </div>
+  <div class="pose-panel-row slider-row">
+    <label>X</label>
+    <input type="range" id="tune-x" min="-180" max="180" step="1" value="0">
+    <span id="tune-x-val">0</span>
+  </div>
+  <div class="pose-panel-row slider-row">
+    <label>Y</label>
+    <input type="range" id="tune-y" min="-180" max="180" step="1" value="0">
+    <span id="tune-y-val">0</span>
+  </div>
+  <div class="pose-panel-row slider-row">
+    <label>Z</label>
+    <input type="range" id="tune-z" min="-180" max="180" step="1" value="0">
+    <span id="tune-z-val">0</span>
+  </div>
+  <div class="pose-panel-actions">
+    <button id="tune-reset-btn">このポーズを初期値に戻す</button>
+    <button id="tune-copy-btn">JSONをコピー</button>
+  </div>
+  <p class="pose-panel-hint" id="pose-panel-hint"></p>
+  <p class="dev-tune-note">
+    ここで追い込んだ数値がそのままスマホ版のポーズ定義に使えます。
+    「JSONをコピー」の内容をClaudeに送ってください。
+  </p>
+</div>
+
+<div id="pose-toast"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="dev.js"></script>
+</body>
+</html>
