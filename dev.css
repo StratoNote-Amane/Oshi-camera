@@ -1,0 +1,100 @@
+/* ============================================================
+   dev.css — PC開発者モード専用のレイアウト
+   ------------------------------------------------------------
+   style.cssの汎用コンポーネント(.pose-panel-*, .expr-btn, .pose-btn,
+   #pose-toastなど)はそのまま流用し、ここではdev.html固有の
+   デスクトップ向けレイアウトだけを定義する。
+   ============================================================ */
+
+body.dev-mode {
+  overflow: hidden;
+  cursor: grab;
+}
+body.dev-mode:active { cursor: grabbing; }
+
+#dev-viewport {
+  position: fixed; inset: 0;
+  background: #1a1d24;
+  touch-action: none;
+}
+#dev-viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+#dev-bg-image {
+  position: absolute; inset: 0; z-index: 0;
+  background-size: cover; background-position: center;
+  display: none; pointer-events: none;
+}
+#dev-bg-image.show { display: block; }
+#three-canvas { position: relative; z-index: 1; }
+
+/* ===== 画面上デバッグログ(F12を開かなくてもエラーが見えるようにする) ===== */
+#dev-debug-log {
+  display: none;
+  position: fixed; left: 18px; bottom: 18px; z-index: 999;
+  max-width: 60vw; max-height: 30vh; overflow-y: auto;
+  background: rgba(120,20,20,.92); color: #ffe0e0;
+  font-family: monospace; font-size: 11px; line-height: 1.6;
+  padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(255,120,120,.4);
+  white-space: pre-wrap; pointer-events: none;
+}
+#dev-debug-log.show { display: block; }
+
+#dev-header {
+  position: fixed; top: 18px; left: 18px; z-index: 50;
+  max-width: 380px; pointer-events: none;
+}
+#dev-header h1 { font-size: 17px; color: #e7b94c; letter-spacing: .03em; margin-bottom: 4px; }
+#dev-header p { font-size: 12px; color: #b7bccb; line-height: 1.6; }
+#dev-header .dev-controls-hint { color: #8fa3be; margin-top: 4px; }
+
+#dev-view-tools {
+  position: fixed; top: 18px; right: 18px; z-index: 50;
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+  pointer-events: none; /* 子のボタンだけをクリック可能にする(コンテナ自体はcanvasを覆わせない) */
+}
+.dev-btn {
+  pointer-events: auto;
+  padding: 9px 16px; border-radius: 8px;
+  background: rgba(20,22,28,.75); border: 1px solid rgba(255,255,255,.18);
+  color: #fff; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+  font-family: inherit;
+}
+.dev-btn:hover { background: rgba(255,255,255,.12); }
+.dev-btn.primary { background: #e7b94c; color: #1a1408; border-color: #e7b94c; font-weight: 700; }
+.dev-btn.primary:hover { background: #f0c768; }
+.dev-file-btn { position: relative; overflow: hidden; text-align: center; }
+.dev-file-btn input[type="file"] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%;
+}
+
+#dev-bottom-bar {
+  position: fixed; bottom: 18px; left: 18px; right: 340px; z-index: 50;
+  display: flex; flex-direction: column; gap: 8px; align-items: center;
+  pointer-events: none;
+}
+#dev-bottom-bar #pose-bar,
+#dev-bottom-bar #expression-bar {
+  position: static; padding: 0; pointer-events: auto;
+  background: rgba(14,16,22,.6); border-radius: 999px; padding: 8px 14px;
+}
+
+#dev-tune-panel {
+  position: fixed; top: 100px; right: 18px; bottom: 18px; z-index: 50;
+  width: 300px;
+  background: rgba(14,16,22,.92);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 16px;
+  padding: 16px;
+  overflow-y: auto;
+  backdrop-filter: blur(14px);
+}
+#dev-tune-panel .pose-panel-head { color: #e7b94c; font-weight: 700; margin-bottom: 14px; }
+.dev-tune-note {
+  margin-top: 16px; font-size: 11px; color: #8fa3be; line-height: 1.7;
+  border-top: 1px solid rgba(255,255,255,.1); padding-top: 12px;
+}
+
+@media (max-width: 900px) {
+  #dev-tune-panel { position: fixed; top: auto; bottom: 90px; left: 18px; right: 18px; width: auto; max-height: 40vh; }
+  #dev-bottom-bar { right: 18px; }
+  #dev-header { max-width: calc(100vw - 36px); }
+}
