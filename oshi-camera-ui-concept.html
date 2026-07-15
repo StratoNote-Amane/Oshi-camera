@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<title>推しカメラ UI刷新コンセプト</title>
+<style>
+:root{
+  --ink:#05060a;
+  --panel:rgba(13,15,20,.72);
+  --panel-strong:rgba(16,18,24,.92);
+  --line:rgba(255,255,255,.14);
+  --line2:rgba(255,255,255,.22);
+  --text:#f2f0ea;
+  --text-dim:#9aa0ad;
+  --gold:#e7b94c;
+  --gold-soft:rgba(231,185,76,.18);
+  --vermilion:#e0664a;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:#000}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif;
+  color:var(--text);
+  -webkit-user-select:none;user-select:none;
+  -webkit-tap-highlight-color:transparent;
+}
+
+/* ============ 疑似カメラビュー(実機ではvideo/canvasの位置) ============ */
+#stage{
+  position:fixed;inset:0;
+  background:
+    radial-gradient(120% 90% at 30% 15%, #1b2130 0%, transparent 55%),
+    radial-gradient(100% 80% at 80% 85%, #241a14 0%, transparent 55%),
+    linear-gradient(180deg,#0a0c12 0%,#05060a 60%,#020204 100%);
+  overflow:hidden;
+}
+/* プレースホルダーの被写体シルエット(実機ではMMDモデル) */
+#subject{
+  position:absolute; left:50%; bottom:22%;
+  width:120px; height:280px; transform:translateX(-50%);
+  transition:transform .35s cubic-bezier(.34,1.4,.4,1), filter .35s;
+}
+#subject svg{width:100%;height:100%;display:block}
+#subject.bump{ animation:bump .4s cubic-bezier(.34,1.6,.4,1); }
+@keyframes bump{ 0%{transform:translateX(-50%) scale(1)} 40%{transform:translateX(-50%) scale(1.06) rotate(-2deg)} 100%{transform:translateX(-50%) scale(1)} }
+.grain{position:absolute;inset:0;opacity:.05;background:repeating-radial-gradient(circle at 0 0,#fff 0,transparent 1px 2px);pointer-events:none}
+
+/* ============ 上部バー：常時薄く・触ると濃く(隠さない) ============ */
+#top-bar{
+  position:fixed; top:0; left:0; right:0; z-index:40;
+  display:flex; justify-content:space-between; align-items:center;
+  padding:calc(env(safe-area-inset-top,0px) + 14px) 16px 0;
+  opacity:.4; transition:opacity .4s;
+}
+#top-bar.awake{opacity:1}
+.icon-row{display:flex;gap:8px}
+.icon-btn{
+  width:38px;height:38px;border-radius:50%;
+  background:var(--panel); border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px; backdrop-filter:blur(10px);
+  transition:transform .12s, border-color .15s;
+}
+.icon-btn:active{transform:scale(.9)}
+
+/* ============ 状態チップ：今の選択を常に見せる ============ */
+#status-chip{
+  position:fixed; left:50%; transform:translateX(-50%);
+  bottom:calc(env(safe-area-inset-bottom,0px) + 132px);
+  z-index:45;
+  display:flex; gap:6px; align-items:center;
+  padding:7px 16px; border-radius:999px;
+  background:var(--panel); border:1px solid var(--line);
+  backdrop-filter:blur(12px);
+  font-size:12.5px; letter-spacing:.02em; color:var(--text-dim);
+  transition:transform .15s;
+}
+#status-chip:active{transform:translateX(-50%) scale(.96)}
+#status-chip b{color:var(--text);font-weight:600}
+#status-chip .sep{color:var(--line2)}
+
+/* ============ ボトムシート ============ */
+#sheet{
+  position:fixed; left:0; right:0; bottom:0; z-index:60;
+  height:62vh;
+  background:var(--panel-strong);
+  backdrop-filter:blur(22px) saturate(140%);
+  border-top:1px solid var(--line2);
+  border-radius:22px 22px 0 0;
+  box-shadow:0 -8px 40px rgba(0,0,0,.5);
+  transform:translateY(calc(100% - 96px));
+  transition:transform .38s cubic-bezier(.32,.9,.25,1);
+  touch-action:none;
+}
+#sheet.dragging{transition:none}
+#sheet.peek{transform:translateY(calc(100% - 180px))}
+#sheet.full{transform:translateY(0)}
+.sheet-handle-zone{
+  padding-top:10px; padding-bottom:6px; text-align:center; cursor:grab;
+}
+.sheet-handle{
+  width:38px;height:5px;border-radius:3px;margin:0 auto;
+  background:var(--line2);
+}
+.sheet-tabs{
+  display:flex; gap:6px; padding:6px 16px 10px;
+  border-bottom:1px solid var(--line);
+}
+.sheet-tab{
+  flex:1; padding:9px 4px; border-radius:10px; text-align:center;
+  font-size:12.5px; color:var(--text-dim); background:none; border:none;
+  font-family:inherit;
+}
+.sheet-tab.active{background:var(--gold-soft); color:var(--gold); font-weight:700}
+.sheet-body{ padding:14px 16px 24px; height:calc(100% - 96px); overflow-y:auto }
+.item-grid{
+  display:grid; grid-template-columns:repeat(4,1fr); gap:10px;
+}
+.item-card{
+  aspect-ratio:1; border-radius:14px;
+  background:rgba(255,255,255,.05); border:1px solid var(--line);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+  font-size:22px;
+}
+.item-card .lbl{font-size:10px;color:var(--text-dim);letter-spacing:.02em}
+.item-card.active{background:var(--gold-soft); border-color:var(--gold)}
+.item-card:active{transform:scale(.94)}
+
+/* ============ 下部：シャッター行 ============ */
+#shutter-row{
+  position:fixed; left:0; right:0; z-index:50;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 22px);
+  display:flex; align-items:center; justify-content:center; gap:20px;
+}
+.mode-chip{
+  padding:9px 14px; border-radius:999px; font-size:12px;
+  background:var(--panel); border:1px solid var(--line);
+}
+#shutter-btn{
+  position:relative;
+  width:76px;height:76px;border-radius:50%;
+  background:#fff; border:4px solid rgba(255,255,255,.35);
+}
+#shutter-btn.charging{ background:var(--gold); border-color:rgba(231,185,76,.5) }
+.spacer{width:58px}
+
+/* ============ ワンタッチ・ダイヤル(長押しで開く扇) ============ */
+#dial-layer{
+  position:fixed; inset:0; z-index:70; pointer-events:none;
+  opacity:0; transition:opacity .2s;
+}
+#dial-layer.open{opacity:1; pointer-events:auto}
+#dial-scrim{position:absolute;inset:0;background:rgba(0,0,0,.35)}
+.dial-item{
+  position:absolute; width:58px;height:58px;border-radius:50%;
+  background:var(--panel-strong); border:1.5px solid var(--line2);
+  display:flex;align-items:center;justify-content:center;font-size:24px;
+  transition:transform .12s, background .12s, border-color .12s;
+  transform:translate(-50%,-50%) scale(.7);
+}
+.dial-item.near{ transform:translate(-50%,-50%) scale(1.18); background:var(--gold-soft); border-color:var(--gold); }
+#dial-hint{
+  position:absolute; left:50%; bottom:calc(env(safe-area-inset-bottom,0px) + 108px);
+  transform:translateX(-50%);
+  font-size:12px; color:var(--text-dim); white-space:nowrap;
+  background:rgba(0,0,0,.4); padding:5px 14px; border-radius:999px;
+}
+
+/* ============ トースト ============ */
+#toast{
+  position:fixed; top:calc(env(safe-area-inset-top,0px) + 60px); left:50%;
+  transform:translateX(-50%) translateY(-8px);
+  background:var(--panel-strong); padding:8px 18px; border-radius:999px;
+  font-size:13px; z-index:80; opacity:0; transition:opacity .15s, transform .15s;
+  border:1px solid var(--line);
+}
+#toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+
+#note{
+  position:fixed; top:calc(env(safe-area-inset-top,0px) + 8px); left:16px; right:16px;
+  text-align:center; font-size:10.5px; color:var(--text-dim); opacity:.6; z-index:5;
+  pointer-events:none;
+}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="subject">
+    <svg viewBox="0 0 100 220" fill="none">
+      <ellipse cx="50" cy="210" rx="34" ry="7" fill="#000" opacity=".35"/>
+      <circle cx="50" cy="34" r="24" fill="#3a3f4d"/>
+      <path d="M50 58c-22 0-34 16-34 40v70c0 20 15 30 34 30s34-10 34-30V98c0-24-12-40-34-40Z" fill="#4a4f5e"/>
+      <rect x="30" y="90" width="12" height="70" rx="6" fill="#3a3f4d" id="arm-l"/>
+      <rect x="58" y="90" width="12" height="70" rx="6" fill="#3a3f4d" id="arm-r"/>
+    </svg>
+  </div>
+  <div class="grain"></div>
+</div>
+
+<div id="note">プロトタイプ：右下シャッターを長押し / 下のチップ・ハンドルをドラッグ</div>
+
+<div id="top-bar">
+  <div class="icon-row">
+    <button class="icon-btn">⟳</button>
+    <button class="icon-btn">▦</button>
+    <button class="icon-btn">⏱</button>
+  </div>
+  <div class="icon-row">
+    <button class="icon-btn">🛠</button>
+    <button class="icon-btn">⟲</button>
+  </div>
+</div>
+
+<button id="status-chip">
+  <span id="chip-pose">🧍 直立</span>
+  <span class="sep">・</span>
+  <span id="chip-expr">😊 笑顔</span>
+</button>
+
+<div id="shutter-row">
+  <button class="mode-chip">📷 写真</button>
+  <button id="shutter-btn"></button>
+  <div class="spacer"></div>
+</div>
+
+<div id="sheet" class="peek">
+  <div class="sheet-handle-zone" id="sheet-handle"><div class="sheet-handle"></div></div>
+  <div class="sheet-tabs">
+    <button class="sheet-tab active" data-tab="pose">ポーズ</button>
+    <button class="sheet-tab" data-tab="expr">表情</button>
+    <button class="sheet-tab" data-tab="framing">アングル</button>
+  </div>
+  <div class="sheet-body">
+    <div class="item-grid" id="grid-pose"></div>
+    <div class="item-grid" id="grid-expr" style="display:none"></div>
+    <div class="item-grid" id="grid-framing" style="display:none"></div>
+  </div>
+</div>
+
+<div id="dial-layer">
+  <div id="dial-scrim"></div>
+  <div id="dial-hint">指を離して選択 ／ そのまま離すと撮影</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const POSES = [
+  {e:'🧍',l:'直立'},{e:'✌️',l:'ピース'},{e:'🙋',l:'手を振る'},{e:'🧎',l:'座る'},
+  {e:'🤔',l:'考え中'},{e:'💁',l:'腰に手'},{e:'🫰',l:'指ハート'},{e:'🙆',l:'両手ピース'},
+];
+const EXPR = [
+  {e:'😊',l:'笑顔'},{e:'😉',l:'ウインク'},{e:'😲',l:'びっくり'},{e:'😣',l:'困り'},{e:'😐',l:'通常'},
+];
+const FRAMING = [ {e:'🧍',l:'全身'},{e:'👤',l:'上半身'},{e:'😊',l:'顔アップ'} ];
+
+let state = { pose: POSES[0], expr: EXPR[0] };
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=>t.classList.remove('show'), 1600);
+}
+function updateChip(){
+  document.getElementById('chip-pose').textContent = state.pose.e+' '+state.pose.l;
+  document.getElementById('chip-expr').textContent = state.expr.e+' '+state.expr.l;
+}
+function bumpSubject(){
+  const s = document.getElementById('subject');
+  s.classList.remove('bump'); void s.offsetWidth; s.classList.add('bump');
+}
+
+/* ---------- グリッド生成 ---------- */
+function buildGrid(containerId, items, kind){
+  const el = document.getElementById(containerId);
+  el.innerHTML = items.map((it,i)=>`<button class="item-card" data-i="${i}">${it.e}<span class="lbl">${it.l}</span></button>`).join('');
+  el.querySelectorAll('.item-card').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const it = items[+btn.dataset.i];
+      el.querySelectorAll('.item-card').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      if(kind==='pose'){ state.pose = it; bumpSubject(); }
+      if(kind==='expr'){ state.expr = it; }
+      updateChip();
+      toast((kind==='pose'?'ポーズ：':kind==='expr'?'表情：':'アングル：')+it.l);
+      // 選んだら軽く畳んで視界を返す
+      setTimeout(()=>setSheetState('peek'), 260);
+    });
+  });
+  el.children[0] && el.children[0].classList.add('active');
+}
+buildGrid('grid-pose', POSES, 'pose');
+buildGrid('grid-expr', EXPR, 'expr');
+buildGrid('grid-framing', FRAMING, 'framing');
+updateChip();
+
+/* ---------- タブ切替 ---------- */
+document.querySelectorAll('.sheet-tab').forEach(tab=>{
+  tab.addEventListener('click', ()=>{
+    document.querySelectorAll('.sheet-tab').forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');
+    ['pose','expr','framing'].forEach(k=>{
+      document.getElementById('grid-'+k).style.display = (k===tab.dataset.tab)?'grid':'none';
+    });
+  });
+});
+
+/* ---------- シート ドラッグ／状態 ---------- */
+const sheet = document.getElementById('sheet');
+function setSheetState(s){ sheet.classList.remove('peek','full'); sheet.classList.add(s); }
+document.getElementById('status-chip').addEventListener('click', ()=> setSheetState('full') );
+
+let dragStartY=null, sheetStartTranslate=0;
+const handle = document.getElementById('sheet-handle');
+function getTranslateY(el){
+  const t = getComputedStyle(el).transform;
+  if(t==='none') return 0;
+  return new DOMMatrixReadOnly(t).m42;
+}
+function onDragStart(y){
+  dragStartY = y;
+  sheetStartTranslate = getTranslateY(sheet);
+  sheet.classList.add('dragging');
+}
+function onDragMove(y){
+  if(dragStartY===null) return;
+  const dy = y - dragStartY;
+  const next = Math.max(0, sheetStartTranslate + dy);
+  sheet.style.transform = `translateY(${next}px)`;
+}
+function onDragEnd(){
+  if(dragStartY===null) return;
+  sheet.classList.remove('dragging');
+  sheet.style.transform = '';
+  const cur = getTranslateY(sheet);
+  const h = sheet.getBoundingClientRect().height;
+  const full = 0, peek = h-180, closed = h-96;
+  const dists = {full:Math.abs(cur-full), peek:Math.abs(cur-peek), closed:Math.abs(cur-closed)};
+  const nearest = Object.keys(dists).sort((a,b)=>dists[a]-dists[b])[0];
+  setSheetState(nearest==='closed'?'peek':nearest); // 完全に閉じる操作はチップから明示的に
+  dragStartY = null;
+}
+handle.addEventListener('pointerdown', e=>{ handle.setPointerCapture(e.pointerId); onDragStart(e.clientY); });
+handle.addEventListener('pointermove', e=>{ if(e.buttons) onDragMove(e.clientY); });
+handle.addEventListener('pointerup', onDragEnd);
+handle.addEventListener('pointercancel', onDragEnd);
+
+/* ---------- 上部バー：触ると起きる ---------- */
+const topBar = document.getElementById('top-bar');
+let wakeTimer;
+function wake(){
+  topBar.classList.add('awake');
+  clearTimeout(wakeTimer);
+  wakeTimer = setTimeout(()=>topBar.classList.remove('awake'), 3200);
+}
+document.getElementById('stage').addEventListener('pointerdown', wake);
+wake();
+
+/* ---------- ワンタッチ・ダイヤル(シャッター長押し) ---------- */
+const shutterBtn = document.getElementById('shutter-btn');
+const dialLayer = document.getElementById('dial-layer');
+let pressTimer=null, dialOpen=false, dialItems=[], nearIdx=-1;
+
+function openDial(cx, cy){
+  dialOpen = true;
+  dialLayer.classList.add('open');
+  document.querySelectorAll('.dial-item').forEach(n=>n.remove());
+  dialItems = POSES.slice(0,5);
+  const R = 120;
+  dialItems.forEach((it,i)=>{
+    const angle = Math.PI + (Math.PI*0.9) * (i/(dialItems.length-1)) - Math.PI*0.45; // 上方向に扇状
+    const x = cx + Math.cos(angle - Math.PI/2) * R;
+    const y = cy + Math.sin(angle - Math.PI/2) * R;
+    const node = document.createElement('div');
+    node.className='dial-item';
+    node.style.left = x+'px'; node.style.top = y+'px';
+    node.textContent = it.e;
+    node._cx=x; node._cy=y;
+    dialLayer.appendChild(node);
+  });
+}
+function updateDialNear(x,y){
+  const nodes = document.querySelectorAll('.dial-item');
+  let best=-1, bestD=44;
+  nodes.forEach((n,i)=>{
+    const d = Math.hypot(x-n._cx, y-n._cy);
+    n.classList.toggle('near', d<44);
+    if(d<bestD){bestD=d;best=i;}
+  });
+  nearIdx = best;
+}
+function closeDial(commit){
+  dialLayer.classList.remove('open');
+  if(commit && nearIdx>=0){
+    state.pose = dialItems[nearIdx];
+    updateChip(); bumpSubject();
+    toast('ポーズ：'+dialItems[nearIdx].l);
+  }
+  nearIdx=-1; dialOpen=false;
+}
+function capture(){
+  document.body.style.filter='brightness(2.4)';
+  setTimeout(()=>document.body.style.filter='',90);
+  toast('📸 撮影しました');
+}
+
+shutterBtn.addEventListener('pointerdown', e=>{
+  shutterBtn.setPointerCapture(e.pointerId);
+  const rect = shutterBtn.getBoundingClientRect();
+  const cx = rect.left+rect.width/2, cy = rect.top+rect.height/2;
+  pressTimer = setTimeout(()=>{ openDial(cx,cy); shutterBtn.classList.add('charging'); }, 320);
+});
+shutterBtn.addEventListener('pointermove', e=>{
+  if(dialOpen) updateDialNear(e.clientX, e.clientY);
+});
+shutterBtn.addEventListener('pointerup', e=>{
+  clearTimeout(pressTimer);
+  shutterBtn.classList.remove('charging');
+  if(dialOpen){ closeDial(nearIdx>=0); }
+  else { capture(); }
+});
+shutterBtn.addEventListener('pointercancel', ()=>{
+  clearTimeout(pressTimer); shutterBtn.classList.remove('charging');
+  if(dialOpen) closeDial(false);
+});
+</script>
+</body>
+</html>
