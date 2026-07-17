@@ -42,7 +42,34 @@ export const GLOBAL_OFFSET_PARAMS = [
 export class MMDCharacter {
   constructor(mesh, def) {
     this.root = mesh;
-    this.unitToMeter = def.unitToMeter;
+    /* ============================================================
+       実寸の自己校正(2026/07修正)
+       ------------------------------------------------------------
+       以前はunitToMeterという固定値(「MMDの1ユニット≒8cm」という伝統的な
+       慣習に基づく想定値、0.081)を無条件に信用していたが、実機で
+       「遠近感を考慮しても明らかに小さすぎる」現象が報告された。
+       PMXの変換元がVRoid/VRM等の場合、ボーン座標が既にメートル単位に
+       近い規約で作られていることがあり、その場合は固定値0.081を掛けると
+       実寸より大きく縮んでしまう。
+       固定値を信用する代わりに、実際にロードされたモデルの生のバウンディング
+       ボックス高さ(bind-pose、スケール適用前)を実測し、既知の実身長
+       (def.targetHeightMeters)に一致するスケール係数をここで都度算出する。
+       これにより、モデルごとの内部単位規約の違いを自動的に吸収できる。
+       def.targetHeightMetersが未定義の場合のみ、後方互換のため
+       旧来のdef.unitToMeter固定値にフォールバックする。
+       ============================================================ */
+    const rawBox = new THREE.Box3().setFromObject(mesh);
+    const rawHeightUnits = Math.max(1e-6, rawBox.max.y - rawBox.min.y);
+    this._rawHeightUnits = rawHeightUnits; // デバッグ表示・検証用に保持
+    if (typeof def.targetHeightMeters === 'number') {
+      this.unitToMeter = def.targetHeightMeters / rawHeightUnits;
+      console.info(
+        `[character.js] ${def.name || def.id}: 生の高さ=${rawHeightUnits.toFixed(3)}units, ` +
+        `目標身長=${def.targetHeightMeters}m → 自動算出unitToMeter=${this.unitToMeter.toFixed(5)}`
+      );
+    } else {
+      this.unitToMeter = def.unitToMeter || 0.081;
+    }
     this.expressions = def.expressions || {};
     this.blinkMorph = def.blinkMorph || null;
     this.poses = def.poses || {};
