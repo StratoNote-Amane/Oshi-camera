@@ -767,8 +767,19 @@ function computeCoverCrop(srcW, srcH, dstW, dstH) {
 
 function capture() {
   effect.render(scene, camera);
-  const stageRect = stage.getBoundingClientRect();
-  const outW = Math.round(stageRect.width), outH = Math.round(stageRect.height);
+  // 2026/07 バグ修正: 以前はstageRect(CSSピクセル、例:390×844)を出力解像度に
+  // 使っていたが、renderer.domElementの実際の描画バッファはdevicePixelRatio
+  // 分だけ大きい(例:780×1688、DPR=2の場合)。drawImage(renderer.domElement,
+  // 0,0,outW,outH)はこの大きいバッファを小さいoutW×outHへ「縮小描画」して
+  // いたことになり、Canvas2Dの単純な縮小リサンプリングは木目やカーテンの
+  // 縞模様のような高周波パターンでモアレ(虹色の縦縞)を起こしやすいことが
+  // 知られている。実機写真で報告された色付き縞模様はこれが原因である
+  // 可能性が高いため、renderer.domElement.width/height(実ピクセル解像度)を
+  // そのまま出力解像度として使い、3Dレイヤーを等倍描画(リサンプリングなし)に
+  // 変更した。副次効果として、写真の解像度も従来のCSSピクセル基準より
+  // 高くなる(画質向上)。
+  const outW = renderer.domElement.width;
+  const outH = renderer.domElement.height;
   const { sx, sy, sw, sh } = computeCoverCrop(video.videoWidth, video.videoHeight, outW, outH);
   const out = document.createElement('canvas');
   out.width = outW; out.height = outH;
@@ -776,8 +787,6 @@ function capture() {
   if (facingMode === 'user') { ctx.translate(outW, 0); ctx.scale(-1, 1); }
   ctx.drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // rendererは既にsizeStageToVideo()で#stageと同じサイズ(outW×outH)に
-  // レンダリングされているため、ここはクロップ不要で等倍描画のみでよい。
   ctx.drawImage(renderer.domElement, 0, 0, outW, outH);
   // 写真としての仕上げ処理(ビネット/グレイン/色収差/疑似ブルーム/カラーグレーディング)。
   // ライブプレビューには適用せず、撮影結果にのみ1回だけ適用する設計
@@ -836,8 +845,9 @@ function pickSupportedMime() {
 function recordFrameLoop() {
   if (!isRecording) return;
   const vw = video.videoWidth, vh = video.videoHeight;
-  const stageRect = stage.getBoundingClientRect();
-  const targetW = Math.round(stageRect.width), targetH = Math.round(stageRect.height);
+  // capture()と同じ理由(DPRスケールされた実ピクセル解像度を使い、
+  // Canvas2Dの縮小リサンプリングによるモアレを避ける)。
+  const targetW = renderer.domElement.width, targetH = renderer.domElement.height;
   if (vw && (recordCanvas.width !== targetW || recordCanvas.height !== targetH)) {
     recordCanvas.width = targetW; recordCanvas.height = targetH;
   }
@@ -846,7 +856,6 @@ function recordFrameLoop() {
     if (facingMode === 'user') { recordCtx.save(); recordCtx.translate(targetW, 0); recordCtx.scale(-1, 1); }
     recordCtx.drawImage(video, sx, sy, sw, sh, 0, 0, targetW, targetH);
     if (facingMode === 'user') recordCtx.restore();
-    // rendererは既に#stageと同じサイズでレンダリングされているため等倍描画でよい。
     recordCtx.drawImage(renderer.domElement, 0, 0, targetW, targetH);
   }
   recordLoopId = requestAnimationFrame(recordFrameLoop);
@@ -1057,9 +1066,10 @@ startBtn.addEventListener('click', async () => {
     await startCamera();
     startScreen.style.display = 'none';
     groundEstimator.start();
-    if (!groundEstimator.isCalibrated()) {
-      await showGroundCalibration();
-    }
+    // 2026/07 修正: 以前は初回のみ(未キャリブレーション時のみ)実行していたが、
+    // 持ち方・設置状況は毎回変わるため、起動のたびに必ずキャリブレーションを
+    // 行うよう変更した(ユーザー指示に基づく)。
+    await showGroundCalibration();
     loadCharacter(CHARACTERS[currentCharacterIndex]);
     environmentLighting.start();
   } catch (err) {
