@@ -95,14 +95,19 @@
 
 <div id="pose-toast"></div>
 
-<!-- 床キャリブレーション画面(Ground Confidence Engine Step2)：
-     起動直後、床の傾き基準を一度だけ取得するためのUI。画面中央の
-     水平ラインを実際の床に(スマホ自体を傾けて)合わせてもらい、
-     その瞬間の傾きから床の高さ(floorY)を算出する。 -->
+<!-- 床キャリブレーション画面(Ground Confidence Engine)：
+     起動直後、カメラのレンズの床からの高さ(cm)を確認・調整してもらうUI。
+     以前は画面中央のラインを目視で床に合わせる方式だったが、ジャイロの
+     姿勢推定自体の精度が保証されないため三角関数での逆算をやめ、
+     また「目視での接地判断は信頼できない」という指摘も踏まえて、
+     数値をそのまま確認するだけの方式に変更した(2026/07)。 -->
 <div id="ground-calib-screen">
-  <div id="ground-calib-line"></div>
   <div class="ground-calib-card">
-    <p>画面中央のラインを<br>床に合わせてください</p>
+    <p>スマホを構える高さ（カメラの位置）を<br>確認してください。目安は150cmです。<br>実際に構える高さに近ければ、後で調整しなくても問題ありません。</p>
+    <div class="ground-calib-height-row">
+      <input type="range" id="ground-calib-height-slider" min="80" max="220" step="1" value="150">
+      <span id="ground-calib-height-value">150cm</span>
+    </div>
     <button id="ground-calib-ok-btn">OK</button>
   </div>
 </div>

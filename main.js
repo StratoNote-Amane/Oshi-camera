@@ -61,6 +61,8 @@ const resultVideo = document.getElementById('result-video');
 const poseToast = document.getElementById('pose-toast');
 const groundCalibScreen = document.getElementById('ground-calib-screen');
 const groundCalibOkBtn = document.getElementById('ground-calib-ok-btn');
+const groundCalibHeightSlider = document.getElementById('ground-calib-height-slider');
+const groundCalibHeightValue = document.getElementById('ground-calib-height-value');
 const groundDebugOverlay = document.getElementById('ground-debug-overlay');
 const groundDebugValue = document.getElementById('ground-debug-value');
 const groundDebugDistance = document.getElementById('ground-debug-distance');
@@ -86,10 +88,13 @@ const DEFAULT_PLACEMENT = { ...placement };
    床推定ロジック自体はjs/ground-estimator.jsに集約し、main.js側は
    update()/getGround()/calibrate()等の公開APIを呼ぶだけに留める
    (実装指示書の「main.jsへ床推定ロジックを書かない」方針に準拠)。
-   referenceDistanceMetersはキャリブレーション時の想定距離として
-   DEFAULT_PLACEMENT.zの絶対値(=キャラクターの標準的な立ち位置)を使う。
+
+   2026/07改訂: 傾きからの逆算(referenceDistanceMeters基準の三角関数)を
+   廃止し、実測したカメラの高さ(cm)をそのままfloorYの根拠にする方式へ
+   変更した。camera.quaternion(ジャイロ推定姿勢)は見た目の演出にのみ
+   使い、床の高さ・距離計算には使わない(CONSTRAINTS.md参照)。
    ------------------------------------------------------------ */
-const groundEstimator = new GroundEstimator({ referenceDistanceMeters: Math.abs(DEFAULT_PLACEMENT.z) });
+const groundEstimator = new GroundEstimator();
 // 1本指ドラッグでplacement.yを直接動かしている間・動かした直後は、
 // GCEによる自動追従(placement.y = ground.floorY)より手動操作を優先する
 // (実装指示書「ただしユーザー操作中は手動入力を優先する」に対応)。
@@ -493,64 +498,33 @@ function touchAngle(t0, t1) { return Math.atan2(t1.clientY - t0.clientY, t1.clie
 function touchMidY(t0, t1) { return (t0.clientY + t1.clientY) / 2; }
 function normalizeAngle(a) { a = (a + Math.PI) % (2 * Math.PI); if (a < 0) a += 2 * Math.PI; return a - Math.PI; }
 
-const _floorRaycaster = new THREE.Raycaster();
 /**
- * 画面上の1点(clientX/Y)を、キャラクターが「今すでに立っている高さ」と
- * 同じ水平面に投影し、そのワールド座標(x,z)を返す。
+ * タップされた画面上の位置へキャラクターを再配置する(左右移動のみ)。
  *
- * カメラの実際の高さ(地面からの距離)は分からないため、それを仮定で
- * 決め打ちすると外した時に浮く/沈む原因になる。代わりに「床は水平で、
- * 今のキャラの足元と同じ高さで続いている」という仮定だけを使うことで、
- * カメラ高さの推定を一切必要とせず、今すでに接地できている状態からの
- * 再配置に限って頑丈に機能する。
+ * 【2026/07 設計変更】以前はタップ位置から3Dレイを飛ばし、床平面との
+ * 交点を求める方式(camera.quaternion経由、ジャイロ推定姿勢に依存)を
+ * 使っていた。しかし実機検証で「Distance: 31.32m」等の異常値が確認され、
+ * 調査の結果、根本原因は「camera.quaternion(ジャイロ推定姿勢)自体の
+ * 精度が保証されていない」という構造的な問題だと判明した。レイ・平面
+ * 交差の式 t=(floorY-origin.y)/dir.y は、dir.y(視線の上下成分)が姿勢
+ * 推定の誤差でわずかにズレただけでtが暴れる(dir.yが0に近づくほど発散
+ * する)性質を持ち、上限クランプは症状を隠すだけで解決にならなかった。
  *
- * @returns {THREE.Vector3|null} 交点のワールド座標。カメラが上を向いている等で
- *   床と交わらない場合はnull。
+ * そのため、位置決めからカメラの姿勢(camera.quaternion)への依存を
+ * 完全に排除した。奥行き(z)は変更せず、1本指ドラッグと同じ計算方式
+ * (画面中央からのオフセットpx→現在の奥行きでのワールド幅に変換)で
+ * 左右位置のみを動かす。これによりカメラの回転に一切依存しなくなり、
+ * 「その場所には配置できません」というエラー自体も構造的に発生しなくなる。
  */
-function computeFloorPointFromScreen(clientX, clientY) {
-  if (!activeCharacter) return null;
+function placeCharacterAtScreenPoint(clientX) {
   const rect = stage.getBoundingClientRect();
-  const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
-  const ndcY = -(((clientY - rect.top) / rect.height) * 2 - 1);
-  _floorRaycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
-  const floorY = activeCharacter.getFootY();
-  const origin = _floorRaycaster.ray.origin;
-  const dir = _floorRaycaster.ray.direction;
-  if (Math.abs(dir.y) < 1e-5) return null; // 床とほぼ平行な視線では交点が求まらない
-  const t = (floorY - origin.y) / dir.y;
-  if (t <= 0.05) return null; // 交点がカメラの後ろ、あるいは極端に近すぎる(=上向きの視線)
-  return origin.clone().addScaledVector(dir, t);
-}
-
-/**
- * タップされた床の位置へキャラクターを再配置する。footYは変化しない
- * (x/zの平行移動のみで、rotation/scaleは変えないため)ので、
- * 常に「今の接地の高さ」を保ったまま位置だけを移せる。
- */
-function placeCharacterAtScreenPoint(clientX, clientY) {
-  const hit = computeFloorPointFromScreen(clientX, clientY);
-  if (!hit) {
-    showPoseToast('その場所には配置できません');
-    return;
-  }
-  // 2026/07 バグ修正: 床平面への無制限レイキャストは、画面上で「地平線
-  // (消失点)」に近い位置をタップすると、レイが床平面とほぼ平行になり、
-  // わずかなピクセル差が実世界の距離では数十m単位に跳ね上がってしまう。
-  // 実機のデバッグ表示で「Distance: 31.32m」という異常値が確認された。
-  // 2本指の奥行きドラッグには MIN_CHARACTER_DISTANCE_Z(-25m)という上限
-  // クランプが既にあるが、タップ配置にはそれが無かった(制御漏れ)。
-  // タップ方向は保ったまま、カメラからの水平距離を同じ上限でクランプする。
-  const camX = camera.position.x, camZ = camera.position.z;
-  const dx = hit.x - camX, dz = hit.z - camZ;
-  const horizDist = Math.hypot(dx, dz);
-  const maxTapDistance = Math.abs(MIN_CHARACTER_DISTANCE_Z);
-  if (horizDist > maxTapDistance && horizDist > 1e-6) {
-    const ratio = maxTapDistance / horizDist;
-    hit.x = camX + dx * ratio;
-    hit.z = camZ + dz * ratio;
-  }
-  placement.x = hit.x;
-  placement.z = hit.z;
+  const distance = Math.abs(placement.z - camera.position.z);
+  const vFovRad = THREE.MathUtils.degToRad(camera.fov);
+  const worldPerPixelY = (2 * Math.tan(vFovRad / 2) * distance) / rect.height;
+  const centerX = rect.left + rect.width / 2;
+  const offsetPx = clientX - centerX;
+  placement.x = camera.position.x + offsetPx * worldPerPixelY;
+  // placement.z(奥行き)は変更しない。奥行きの変更は2本指縦ドラッグのみが担当する。
   applyPlacement();
   showPoseToast('この場所に配置しました');
 }
@@ -654,7 +628,7 @@ stage.addEventListener('touchend', (e) => {
     const movedPx = Math.hypot(t.clientX - touchState.startX, t.clientY - touchState.startY);
     const elapsedMs = Date.now() - touchState.startTime;
     if (movedPx <= TAP_MAX_MOVE_PX && elapsedMs <= TAP_MAX_DURATION_MS) {
-      placeCharacterAtScreenPoint(t.clientX, t.clientY);
+      placeCharacterAtScreenPoint(t.clientX);
     }
   }
   if (e.touches.length === 0) touchState.mode = null;
@@ -1061,11 +1035,23 @@ initCharacterSelect();
    ============================================================ */
 function showGroundCalibration() {
   return new Promise((resolve) => {
+    // 前回確認済みの高さ(なければデフォルト150cm)を初期値として表示する。
+    const initialCm = groundEstimator.getCameraHeightCm();
+    if (groundCalibHeightSlider) groundCalibHeightSlider.value = String(initialCm);
+    if (groundCalibHeightValue) groundCalibHeightValue.textContent = `${initialCm}cm`;
+
+    const onSliderInput = () => {
+      if (groundCalibHeightValue) groundCalibHeightValue.textContent = `${groundCalibHeightSlider.value}cm`;
+    };
+    if (groundCalibHeightSlider) groundCalibHeightSlider.addEventListener('input', onSliderInput);
+
     groundCalibScreen.classList.add('show');
     const onOk = () => {
-      groundEstimator.calibrate();
+      const cm = groundCalibHeightSlider ? parseFloat(groundCalibHeightSlider.value) : GroundEstimator.DEFAULT_CAMERA_HEIGHT_CM;
+      groundEstimator.calibrate(cm / 100);
       groundCalibScreen.classList.remove('show');
       groundCalibOkBtn.removeEventListener('click', onOk);
+      if (groundCalibHeightSlider) groundCalibHeightSlider.removeEventListener('input', onSliderInput);
       resolve();
     };
     groundCalibOkBtn.addEventListener('click', onOk);
