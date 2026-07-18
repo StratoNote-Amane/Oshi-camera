@@ -55,6 +55,8 @@ const countdownNum = document.getElementById('countdown-num');
 const flashOverlay = document.getElementById('flash-overlay');
 const shutterStatus = document.getElementById('shutter-status');
 const framingBar = document.getElementById('framing-bar');
+const depthSlider = document.getElementById('depth-slider');
+const depthLabel = document.getElementById('depth-label');
 const modeBtn = document.getElementById('mode-btn');
 const resultImgWrap = document.getElementById('result-imgwrap');
 const resultVideo = document.getElementById('result-video');
@@ -270,6 +272,12 @@ tuneCopyBtn.addEventListener('click', () => poseTuner.copyJSON());
    配置の反映
    ============================================================ */
 function applyPlacement() {
+  // 距離(奥行き)スライダーの表示は、キャラクター読み込み前でも(2本指ドラッグ同様に)
+  // placement.zの変更に追従させたいので、activeCharacterのnullチェックより前に行う。
+  const distanceFromCamAlways = Math.abs(placement.z - camera.position.z);
+  if (depthSlider) depthSlider.value = String(placement.z);
+  if (depthLabel) depthLabel.textContent = `${distanceFromCamAlways.toFixed(1)}m`;
+
   if (!activeCharacter) return;
   activeCharacter.setTransform(placement);
   const footY = activeCharacter.getFootY();
@@ -278,7 +286,7 @@ function applyPlacement() {
   // 距離が初めて意味を持つようになった。距離に応じた空気遠近法
   // (彩度・コントラスト・輪郭線の減衰)と、影の距離フェードの両方で
   // 同じ距離値を使う(atmosphere.js側のNEAR_M〜FAR_Mが単一の基準になる)。
-  const distanceFromCam = Math.abs(placement.z - camera.position.z);
+  const distanceFromCam = distanceFromCamAlways;
   shadowRig.update(
     footY, width, placement,
     environmentLighting.getEstimatedAzimuthDeg(),
@@ -475,6 +483,30 @@ const MAX_CHARACTER_DISTANCE_Z = -0.8;
 // 縦ドラッグの感度係数。1.0が「指の動きと同じ量だけ実距離が動く」基準値で、
 // 奥行きの変化は横移動より体感しにくいため気持ち強めにしている。
 const DEPTH_DRAG_GAIN = 1.3;
+
+/* ------------------------------------------------------------
+   距離(奥行き)調整バー
+   ------------------------------------------------------------
+   2本指縦ドラッグは奥行きを動かせるが、数十m先など遠距離での
+   微調整には指の感度だけでは狙った位置に正確に合わせづらい。
+   このスライダーはplacement.zを直接、上のMIN/MAX_CHARACTER_DISTANCE_Z
+   の範囲で操作できるようにしたもので、2本指ドラッグと同じ状態
+   (placement.z)を共有する。値はapplyPlacement()側で常に同期される
+   ため、指ジェスチャーで動かした後もスライダーの位置がズレない。
+   ------------------------------------------------------------ */
+if (depthSlider) {
+  depthSlider.min = String(MIN_CHARACTER_DISTANCE_Z);
+  depthSlider.max = String(MAX_CHARACTER_DISTANCE_Z);
+  depthSlider.step = '0.1';
+  depthSlider.addEventListener('input', () => {
+    placement.z = THREE.MathUtils.clamp(
+      parseFloat(depthSlider.value),
+      MIN_CHARACTER_DISTANCE_Z,
+      MAX_CHARACTER_DISTANCE_Z
+    );
+    applyPlacement();
+  });
+}
 
 // 2本指ジェスチャーが「拡縮/回転(planar)」なのか「奥行き移動(depth)」なのかを
 // 判定してロックするまでの猶予(px)。人間が指を広げて拡大しようとする動作は、

@@ -119,6 +119,40 @@ html, body {
 }
 .framing-btn.active { background: rgba(231,185,76,.28); border-color: #e7b94c; }
 .framing-btn:active { transform: scale(.94); }
+
+/* ===== 距離(奥行き)調整バー =====
+   2本指縦ドラッグの精密操作を補うためのスライダー。既存のframing-bar
+   の下に、同じ横並びトーンで配置する。 */
+#depth-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 20px 0; pointer-events: none;
+}
+#depth-icon {
+  font-size: 12px; opacity: .65; pointer-events: none; flex-shrink: 0;
+}
+#depth-slider {
+  flex: 1; pointer-events: auto;
+  -webkit-appearance: none; appearance: none;
+  height: 4px; border-radius: 2px;
+  background: rgba(255,255,255,.22);
+  outline: none;
+}
+#depth-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 17px; height: 17px; border-radius: 50%;
+  background: #e7b94c; border: 2px solid rgba(20,22,28,.9);
+  box-shadow: 0 1px 4px rgba(0,0,0,.4);
+}
+#depth-slider::-moz-range-thumb {
+  width: 17px; height: 17px; border-radius: 50%; border: 2px solid rgba(20,22,28,.9);
+  background: #e7b94c;
+}
+#depth-label {
+  pointer-events: none;
+  font-size: 11.5px; color: #fff; min-width: 42px; text-align: right;
+  font-variant-numeric: tabular-nums; letter-spacing: .02em;
+  text-shadow: 0 1px 2px rgba(0,0,0,.6);
+}
 .top-bar-left { display: flex; gap: 8px; pointer-events: none; }
 .top-bar-right { display: flex; gap: 8px; pointer-events: none; }
 .icon-btn {

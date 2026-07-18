@@ -60,6 +60,14 @@
     <!-- アングル(フレーミング)切替：キャラクターの配置ではなくカメラ側を動かすので、
          数値が多少ズレていても他の操作(ドラッグ配置など)と干渉しない -->
     <div id="framing-bar"></div>
+    <!-- 距離(奥行き)調整バー：2本指縦ドラッグだけでは数十m先などの
+         遠距離を正確に狙いにくいため、スライダーで直接distanceを
+         指定できるようにした(main.js側でplacement.zと相互同期)。 -->
+    <div id="depth-bar">
+      <span id="depth-icon" aria-hidden="true">📏</span>
+      <input type="range" id="depth-slider" min="-25" max="-0.8" step="0.1" value="-3.2" aria-label="キャラクターまでの距離">
+      <span id="depth-label">3.2m</span>
+    </div>
   </div>
 
   <!-- ポーズ/表情セレクター：以前は横スクロールの帯を2本(pose-bar/expression-bar)
