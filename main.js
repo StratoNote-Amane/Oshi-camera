@@ -533,6 +533,22 @@ function placeCharacterAtScreenPoint(clientX, clientY) {
     showPoseToast('その場所には配置できません');
     return;
   }
+  // 2026/07 バグ修正: 床平面への無制限レイキャストは、画面上で「地平線
+  // (消失点)」に近い位置をタップすると、レイが床平面とほぼ平行になり、
+  // わずかなピクセル差が実世界の距離では数十m単位に跳ね上がってしまう。
+  // 実機のデバッグ表示で「Distance: 31.32m」という異常値が確認された。
+  // 2本指の奥行きドラッグには MIN_CHARACTER_DISTANCE_Z(-25m)という上限
+  // クランプが既にあるが、タップ配置にはそれが無かった(制御漏れ)。
+  // タップ方向は保ったまま、カメラからの水平距離を同じ上限でクランプする。
+  const camX = camera.position.x, camZ = camera.position.z;
+  const dx = hit.x - camX, dz = hit.z - camZ;
+  const horizDist = Math.hypot(dx, dz);
+  const maxTapDistance = Math.abs(MIN_CHARACTER_DISTANCE_Z);
+  if (horizDist > maxTapDistance && horizDist > 1e-6) {
+    const ratio = maxTapDistance / horizDist;
+    hit.x = camX + dx * ratio;
+    hit.z = camZ + dz * ratio;
+  }
   placement.x = hit.x;
   placement.z = hit.z;
   applyPlacement();
