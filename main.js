@@ -131,13 +131,82 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 const effect = new OutlineEffect(renderer, { defaultThickness: 0.0015, defaultColor: [0.05, 0.04, 0.05], defaultAlpha: 0.6 });
 
 const scene = new THREE.Scene();
-/* 遠近法(パースペクティブ)についての注記(Sprint 1「遠近法」対応):
-   three.jsのPerspectiveCamera.fovは垂直画角(度)。iPhoneの背面広角
-   レンズ(26mm相当)は対角画角がおよそ73〜78度、16:9クロップ時の
-   垂直画角に換算すると約42〜44度になるという公開情報を根拠に42度とした。
-   フロント(TrueDepth)カメラはやや広角レンズのため40度とやや狭めに調整。
-   実際のレンズ画角とはズレがあり得るため、実機で違和感があれば
-   facingMode別のこの値を直接調整すること。 */
+/* 遠近法(パースペクティブ)についての注記(2026/07 再設計):
+   以前は「iPhoneの背面広角レンズ(26mm相当、対角画角約73〜78度)を
+   16:9クロップした時の垂直画角」として42度/40度を直接ハードコードして
+   いた。しかしsizeStageToVideo()は実際の動画ネイティブ解像度(vw/vh)を
+   一切使わず、常にこの固定値をそのまま camera.fov へ入れていた。
+
+   実機で「距離を離すと縮小しすぎる(現実の見え方と合わない)」という
+   フィードバックを受けて調査した結果、これは構造的なバグだと判明した:
+   画面(#stage)はポートレート(縦長)のアスペクト比だが、動画は
+   object-fit:coverで表示されているため、動画のネイティブアスペクト比と
+   画面のアスペクト比の大小関係によって「上下がクロップされるのか
+   左右がクロップされるのか」が変わり、それに応じて実際に画面へ
+   映っている垂直画角も変わる。従来の42度/40度は「動画が16:9のまま
+   左右だけクロップされる」場合の値を決め打ちしていたが、動画の実際の
+   ネイティブ解像度(video.videoWidth/videoHeight、端末やブラウザの
+   実装によって縦横比が変わりうる)や画面のアスペクト比次第では、
+   上下がクロップされて実際の垂直画角はもっと狭くなっているケースも
+   あり得る。垂直画角が実際より広いまま計算されていると、同じ実寸・
+   同じ距離のキャラクターが本来より小さく描画される
+   (画角が広い=より広い範囲を同じ画面に収める=物が相対的に小さく映る)。
+
+   この再設計では、「レンズ自体の対角画角(端末のセンサー特性、動画の
+   縦横比に依存しない定数)」を根拠の値として持ち、実際の動画ネイティブ
+   解像度と画面のアスペクト比から、object-fit:coverでクロップされた後に
+   本当に画面へ映っている垂直画角を都度計算する(computeCoveredVerticalFovDeg
+   参照)。対角画角の値自体(76.2度/73.2度)は、従来ドキュメント化されていた
+   「26mm相当、対角画角約73〜78度」という前提と、旧来の42度/40度という
+   決め打ち値(16:9クロップ時の垂直画角として算出されていたもの)から逆算した
+   値であり、新たな当てずっぽうではなく、既存の前提を壊さないよう
+   後方互換的に導出している。実機で違和感があれば、この対角画角の値
+   (DIAGONAL_FOV_DEG_BY_FACING)を直接調整すること。 */
+const DIAGONAL_FOV_DEG_BY_FACING = { environment: 76.2, user: 73.2 };
+
+/**
+ * レンズのネイティブ対角画角と、動画のネイティブ解像度・表示コンテナの
+ * 解像度から、object-fit:coverでクロップされた後に実際に画面へ映って
+ * いる垂直画角(度)を計算する。
+ *
+ * 考え方:
+ *   1. 対角画角とネイティブアスペクト比(videoW/videoH)から、クロップ前の
+ *      ネイティブ垂直画角を求める(センサー高さ=1とした時の対角長との
+ *      比率から三角関数で逆算)。
+ *   2. computeCoverCrop()と全く同じcover方式のクロップ幾何を使い、
+ *      「ネイティブの縦幅のうち何割が実際に画面に残るか」を求める。
+ *      (左右クロップのみなら1.0=全部残る、上下クロップがあるケースは
+ *      1.0未満になる)
+ *   3. 残った割合をtan(垂直画角/2)に掛け合わせ、実際に見えている
+ *      垂直画角へ変換する(センサー上での可視範囲がその割合分だけ
+ *      狭まる、という比例関係を利用)。
+ *
+ * @param {number} diagonalFovDeg レンズのネイティブ対角画角(度)
+ * @param {number} videoW 動画のネイティブ幅(px)
+ * @param {number} videoH 動画のネイティブ高さ(px)
+ * @param {number} containerW 表示コンテナの幅(px)
+ * @param {number} containerH 表示コンテナの高さ(px)
+ * @returns {number|null} 実際に見えている垂直画角(度)。入力が不正な場合はnull。
+ */
+function computeCoveredVerticalFovDeg(diagonalFovDeg, videoW, videoH, containerW, containerH) {
+  if (!videoW || !videoH || !containerW || !containerH) return null;
+  const videoAspect = videoW / videoH;
+  const diagUnits = Math.sqrt(videoAspect * videoAspect + 1); // センサー高さ=1とした対角長
+  const halfDiagRad = THREE.MathUtils.degToRad(diagonalFovDeg / 2);
+  const halfVFovNativeRad = Math.atan(Math.tan(halfDiagRad) / diagUnits);
+
+  // computeCoverCrop()と同じクロップ幾何(左右クロップ/上下クロップの分岐)を使い、
+  // ネイティブ縦幅のうち実際に画面へ残る割合を求める。
+  const crop = computeCoverCrop(videoW, videoH, containerW, containerH);
+  const visibleHeightFraction = THREE.MathUtils.clamp(crop.sh / videoH, 0.01, 1);
+
+  const halfVFovVisibleRad = Math.atan(Math.tan(halfVFovNativeRad) * visibleHeightFraction);
+  return THREE.MathUtils.radToDeg(halfVFovVisibleRad) * 2;
+}
+
+// 動画のネイティブ解像度が判明するまでの初期値(16:9をポートレート画面へ
+// 左右クロップで表示する前提の暫定値)。onVideoMeta()発火後は必ず
+// computeCoveredVerticalFovDeg()による実測ベースの値へ上書きされる。
 const FOV_BY_FACING = { environment: 42, user: 40 };
 const camera = new THREE.PerspectiveCamera(FOV_BY_FACING.environment, 1, 0.05, 100);
 camera.position.set(0, 0, 0);
@@ -445,6 +514,15 @@ function sizeStageToVideo(vw, vh) {
   canvas.style.width = '100%';
   canvas.style.height = '100%';
   camera.aspect = w / h;
+  // 2026/07修正: 以前はvw/vh(動画のネイティブ解像度)を受け取りながら
+  // 一切使っておらず、camera.fovは常にFOV_BY_FACINGの決め打ち値のままだった。
+  // object-fit:coverのクロップ方向(左右クロップか上下クロップか)は
+  // 動画のネイティブアスペクト比と画面アスペクト比の大小関係で変わり、
+  // それによって実際に画面へ映る垂直画角も変わるため、ここで都度
+  // 正しく計算し直す(詳細はcomputeCoveredVerticalFovDeg()のコメント参照)。
+  const diagonalFov = DIAGONAL_FOV_DEG_BY_FACING[facingMode];
+  const coveredVFov = computeCoveredVerticalFovDeg(diagonalFov, vw, vh, w, h);
+  if (coveredVFov !== null) camera.fov = coveredVFov;
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', () => {
@@ -679,8 +757,9 @@ resetBtn.addEventListener('click', () => {
 
 switchCamBtn.addEventListener('click', async () => {
   facingMode = facingMode === 'environment' ? 'user' : 'environment';
-  camera.fov = FOV_BY_FACING[facingMode];
-  camera.updateProjectionMatrix();
+  // camera.fovは新しいストリームのloadedmetadata発火時にonVideoMeta()→
+  // sizeStageToVideo()経由で、実際のネイティブ解像度を元に正しく
+  // 再計算される(DIAGONAL_FOV_DEG_BY_FACING[facingMode]を参照)。
   await startCamera();
   environmentLighting.start();
 });
