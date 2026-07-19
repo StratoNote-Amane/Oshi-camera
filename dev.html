@@ -39,7 +39,7 @@
      pointer-events:noneを継承してクリック不能になっていたため、外に出した） -->
 <div id="dev-character-switch"></div>
 
-<!-- 左：シーン設定（環境/色調タブ、折りたたみ可能） -->
+<!-- 左：シーン設定（環境/色調/検証タブ、折りたたみ可能） -->
 <div id="dev-scene-panel">
   <button id="dev-scene-panel-toggle" type="button">
     <span class="chevron">▾</span> シーン設定
@@ -48,9 +48,13 @@
     <div class="dsp-tabs">
       <button class="dsp-tab active" data-tab="env" type="button">環境</button>
       <button class="dsp-tab" data-tab="grade" type="button">色調</button>
+      <!-- 新規追加: 距離較正ツール用タブ(calibration-tool.js、dev.jsから
+           #dsp-tab-calib を参照して中身を構築する) -->
+      <button class="dsp-tab" data-tab="calib" type="button">検証</button>
     </div>
     <div id="dsp-tab-env" class="dsp-tab-content active"></div>
     <div id="dsp-tab-grade" class="dsp-tab-content"></div>
+    <div id="dsp-tab-calib" class="dsp-tab-content"></div>
   </div>
 </div>
 

@@ -6,6 +6,7 @@ import { CHARACTERS } from './js/characters-data.js';
 import { loadCharacter as loadCharacterCore, disposeCharacter } from './js/character.js';
 import { buildExpressionBar, buildPoseBar, createPoseTuner } from './js/pose-ui.js';
 import { DevEnvironment, buildEnvironmentControls, buildColorGradePanel } from './js/dev-environment.js';
+import { buildCalibrationPanel } from './js/calibration-tool.js';
 
 /* ============================================================
    DOM
@@ -40,6 +41,9 @@ const scenePanelToggle = document.getElementById('dev-scene-panel-toggle');
 const tabButtons = document.querySelectorAll('.dsp-tab');
 const tabEnv = document.getElementById('dsp-tab-env');
 const tabGrade = document.getElementById('dsp-tab-grade');
+// 新規: 距離較正ツール用タブ(dev.html側に#dsp-tab-calibと対応するタブボタンの
+// 追加が必要。index.html側の変更点は別途パッチとして案内する)
+const tabCalib = document.getElementById('dsp-tab-calib');
 
 function hideLoadingOverlay() {
   loadingOverlay.classList.add('hide');
@@ -65,7 +69,7 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 
 /* ============================================================
-   タブ切替（環境／色調）
+   タブ切替（環境／色調／検証）
    ============================================================ */
 tabButtons.forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -73,6 +77,7 @@ tabButtons.forEach((btn) => {
     btn.classList.add('active');
     tabEnv.classList.toggle('active', btn.dataset.tab === 'env');
     tabGrade.classList.toggle('active', btn.dataset.tab === 'grade');
+    if (tabCalib) tabCalib.classList.toggle('active', btn.dataset.tab === 'calib');
   });
 });
 scenePanelToggle.addEventListener('click', () => {
@@ -229,6 +234,31 @@ screenshotBtn.addEventListener('click', () => {
 });
 
 /* ============================================================
+   距離較正ツール（新規）
+   ------------------------------------------------------------
+   dev.jsは元々main.jsのようなplacement/applyPlacementの仕組みを
+   持たず、キャラクターは常時{x:0,y:0,z:0,rotY:0,scale:1}の固定
+   transformで表示していた。calibration-tool.jsはplacement.zを
+   一時的に動かして測定するため、このツール専用の最小限のplacement
+   オブジェクトをここに新設する(ポーズ/表情等、他の挙動には一切影響しない)。
+   ============================================================ */
+const calibPlacement = { x: 0, y: 0, z: 0, rotY: 0, scale: 1 };
+function applyCalibPlacement() {
+  if (activeCharacter) activeCharacter.setTransform(calibPlacement);
+}
+if (tabCalib) {
+  buildCalibrationPanel(tabCalib, {
+    camera,
+    renderer: charRenderer,
+    getCharacter: () => activeCharacter,
+    placement: calibPlacement,
+    applyPlacement: applyCalibPlacement,
+  });
+} else {
+  console.warn('[dev.js] #dsp-tab-calib が見つかりません。dev.htmlに検証タブの追加が必要です。');
+}
+
+/* ============================================================
    キャラクター読み込み・切替（チップボタン式）
    ------------------------------------------------------------
    以前はCHARACTERS[0](かなた)を固定で読み込むだけで、dev.htmlには
@@ -268,7 +298,9 @@ function loadAndActivateCharacter(def) {
       clearTimeout(loadTimeoutId);
       if (activeCharacter) disposeCharacter(activeCharacter, characterScene);
       activeCharacter = character;
-      character.setTransform({ x: 0, y: 0, z: 0, rotY: 0, scale: 1 });
+      // 較正ツールが動かしたplacementを引き継いで初期表示する
+      // (通常時はcalibPlacementは原点のままなので見た目は従来通り)
+      character.setTransform(calibPlacement);
       buildExpressionBar(expressionBar, def, () => activeCharacter, (label) => showPoseToast(`表情: ${label}`));
       buildPoseBar(poseBar, def, () => activeCharacter, (label) => {
         poseTuner.refresh();

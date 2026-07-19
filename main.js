@@ -8,7 +8,8 @@ import { applyAtmosphericPerspective } from './js/atmosphere.js';
 import { CHARACTERS } from './js/characters-data.js';
 import { loadCharacter as loadCharacterCore } from './js/character.js';
 import { createPoseTuner } from './js/pose-ui.js';
-import { GroundEstimator } from './js/ground-estimator.js';
+import { createEnvironmentAnalyzer } from './js/environment-analyzer.js';
+import { verifyProjectionConsistency } from './js/camera-projection.js';
 
 let currentCharacterIndex = 0;
 
@@ -55,20 +56,10 @@ const countdownNum = document.getElementById('countdown-num');
 const flashOverlay = document.getElementById('flash-overlay');
 const shutterStatus = document.getElementById('shutter-status');
 const framingBar = document.getElementById('framing-bar');
-const depthSlider = document.getElementById('depth-slider');
-const depthLabel = document.getElementById('depth-label');
 const modeBtn = document.getElementById('mode-btn');
 const resultImgWrap = document.getElementById('result-imgwrap');
 const resultVideo = document.getElementById('result-video');
 const poseToast = document.getElementById('pose-toast');
-const groundCalibScreen = document.getElementById('ground-calib-screen');
-const groundCalibOkBtn = document.getElementById('ground-calib-ok-btn');
-const groundCalibHeightSlider = document.getElementById('ground-calib-height-slider');
-const groundCalibHeightValue = document.getElementById('ground-calib-height-value');
-const groundDebugOverlay = document.getElementById('ground-debug-overlay');
-const groundDebugValue = document.getElementById('ground-debug-value');
-const groundDebugDistance = document.getElementById('ground-debug-distance');
-const groundDebugHeight = document.getElementById('ground-debug-height');
 
 let poseToastTimer = null;
 function showPoseToast(text) {
@@ -83,32 +74,6 @@ function showPoseToast(text) {
    ============================================================ */
 const placement = { x: 0, y: -1.1, z: -3.2, rotY: 0, scale: 1 };
 const DEFAULT_PLACEMENT = { ...placement };
-
-/* ------------------------------------------------------------
-   Ground Confidence Engine (GCE)
-   ------------------------------------------------------------
-   床推定ロジック自体はjs/ground-estimator.jsに集約し、main.js側は
-   update()/getGround()/calibrate()等の公開APIを呼ぶだけに留める
-   (実装指示書の「main.jsへ床推定ロジックを書かない」方針に準拠)。
-
-   2026/07改訂: 傾きからの逆算(referenceDistanceMeters基準の三角関数)を
-   廃止し、実測したカメラの高さ(cm)をそのままfloorYの根拠にする方式へ
-   変更した。camera.quaternion(ジャイロ推定姿勢)は見た目の演出にのみ
-   使い、床の高さ・距離計算には使わない(CONSTRAINTS.md参照)。
-   ------------------------------------------------------------ */
-const groundEstimator = new GroundEstimator();
-// 1本指ドラッグでplacement.yを直接動かしている間・動かした直後は、
-// GCEによる自動追従(placement.y = ground.floorY)より手動操作を優先する
-// (実装指示書「ただしユーザー操作中は手動入力を優先する」に対応)。
-// ⟲(リセット)ボタンを押すと基準に戻すのと合わせて自動追従を再開する。
-let userAdjustedGroundY = false;
-let lastAppliedFloorY = null;
-
-// ?debug=1 または localStorageのoshi_debug_groundキーでGROUND Confidence表示を有効化。
-const DEBUG_GROUND =
-  new URLSearchParams(location.search).get('debug') === '1' ||
-  (() => { try { return localStorage.getItem('oshi_debug_ground') === '1'; } catch (e) { return false; } })();
-if (DEBUG_GROUND && groundDebugOverlay) groundDebugOverlay.classList.add('show');
 
 let facingMode = 'environment';
 let currentStream = null;
@@ -131,82 +96,13 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 const effect = new OutlineEffect(renderer, { defaultThickness: 0.0015, defaultColor: [0.05, 0.04, 0.05], defaultAlpha: 0.6 });
 
 const scene = new THREE.Scene();
-/* 遠近法(パースペクティブ)についての注記(2026/07 再設計):
-   以前は「iPhoneの背面広角レンズ(26mm相当、対角画角約73〜78度)を
-   16:9クロップした時の垂直画角」として42度/40度を直接ハードコードして
-   いた。しかしsizeStageToVideo()は実際の動画ネイティブ解像度(vw/vh)を
-   一切使わず、常にこの固定値をそのまま camera.fov へ入れていた。
-
-   実機で「距離を離すと縮小しすぎる(現実の見え方と合わない)」という
-   フィードバックを受けて調査した結果、これは構造的なバグだと判明した:
-   画面(#stage)はポートレート(縦長)のアスペクト比だが、動画は
-   object-fit:coverで表示されているため、動画のネイティブアスペクト比と
-   画面のアスペクト比の大小関係によって「上下がクロップされるのか
-   左右がクロップされるのか」が変わり、それに応じて実際に画面へ
-   映っている垂直画角も変わる。従来の42度/40度は「動画が16:9のまま
-   左右だけクロップされる」場合の値を決め打ちしていたが、動画の実際の
-   ネイティブ解像度(video.videoWidth/videoHeight、端末やブラウザの
-   実装によって縦横比が変わりうる)や画面のアスペクト比次第では、
-   上下がクロップされて実際の垂直画角はもっと狭くなっているケースも
-   あり得る。垂直画角が実際より広いまま計算されていると、同じ実寸・
-   同じ距離のキャラクターが本来より小さく描画される
-   (画角が広い=より広い範囲を同じ画面に収める=物が相対的に小さく映る)。
-
-   この再設計では、「レンズ自体の対角画角(端末のセンサー特性、動画の
-   縦横比に依存しない定数)」を根拠の値として持ち、実際の動画ネイティブ
-   解像度と画面のアスペクト比から、object-fit:coverでクロップされた後に
-   本当に画面へ映っている垂直画角を都度計算する(computeCoveredVerticalFovDeg
-   参照)。対角画角の値自体(76.2度/73.2度)は、従来ドキュメント化されていた
-   「26mm相当、対角画角約73〜78度」という前提と、旧来の42度/40度という
-   決め打ち値(16:9クロップ時の垂直画角として算出されていたもの)から逆算した
-   値であり、新たな当てずっぽうではなく、既存の前提を壊さないよう
-   後方互換的に導出している。実機で違和感があれば、この対角画角の値
-   (DIAGONAL_FOV_DEG_BY_FACING)を直接調整すること。 */
-const DIAGONAL_FOV_DEG_BY_FACING = { environment: 76.2, user: 73.2 };
-
-/**
- * レンズのネイティブ対角画角と、動画のネイティブ解像度・表示コンテナの
- * 解像度から、object-fit:coverでクロップされた後に実際に画面へ映って
- * いる垂直画角(度)を計算する。
- *
- * 考え方:
- *   1. 対角画角とネイティブアスペクト比(videoW/videoH)から、クロップ前の
- *      ネイティブ垂直画角を求める(センサー高さ=1とした時の対角長との
- *      比率から三角関数で逆算)。
- *   2. computeCoverCrop()と全く同じcover方式のクロップ幾何を使い、
- *      「ネイティブの縦幅のうち何割が実際に画面に残るか」を求める。
- *      (左右クロップのみなら1.0=全部残る、上下クロップがあるケースは
- *      1.0未満になる)
- *   3. 残った割合をtan(垂直画角/2)に掛け合わせ、実際に見えている
- *      垂直画角へ変換する(センサー上での可視範囲がその割合分だけ
- *      狭まる、という比例関係を利用)。
- *
- * @param {number} diagonalFovDeg レンズのネイティブ対角画角(度)
- * @param {number} videoW 動画のネイティブ幅(px)
- * @param {number} videoH 動画のネイティブ高さ(px)
- * @param {number} containerW 表示コンテナの幅(px)
- * @param {number} containerH 表示コンテナの高さ(px)
- * @returns {number|null} 実際に見えている垂直画角(度)。入力が不正な場合はnull。
- */
-function computeCoveredVerticalFovDeg(diagonalFovDeg, videoW, videoH, containerW, containerH) {
-  if (!videoW || !videoH || !containerW || !containerH) return null;
-  const videoAspect = videoW / videoH;
-  const diagUnits = Math.sqrt(videoAspect * videoAspect + 1); // センサー高さ=1とした対角長
-  const halfDiagRad = THREE.MathUtils.degToRad(diagonalFovDeg / 2);
-  const halfVFovNativeRad = Math.atan(Math.tan(halfDiagRad) / diagUnits);
-
-  // computeCoverCrop()と同じクロップ幾何(左右クロップ/上下クロップの分岐)を使い、
-  // ネイティブ縦幅のうち実際に画面へ残る割合を求める。
-  const crop = computeCoverCrop(videoW, videoH, containerW, containerH);
-  const visibleHeightFraction = THREE.MathUtils.clamp(crop.sh / videoH, 0.01, 1);
-
-  const halfVFovVisibleRad = Math.atan(Math.tan(halfVFovNativeRad) * visibleHeightFraction);
-  return THREE.MathUtils.radToDeg(halfVFovVisibleRad) * 2;
-}
-
-// 動画のネイティブ解像度が判明するまでの初期値(16:9をポートレート画面へ
-// 左右クロップで表示する前提の暫定値)。onVideoMeta()発火後は必ず
-// computeCoveredVerticalFovDeg()による実測ベースの値へ上書きされる。
+/* 遠近法(パースペクティブ)についての注記(Sprint 1「遠近法」対応):
+   three.jsのPerspectiveCamera.fovは垂直画角(度)。iPhoneの背面広角
+   レンズ(26mm相当)は対角画角がおよそ73〜78度、16:9クロップ時の
+   垂直画角に換算すると約42〜44度になるという公開情報を根拠に42度とした。
+   フロント(TrueDepth)カメラはやや広角レンズのため40度とやや狭めに調整。
+   実際のレンズ画角とはズレがあり得るため、実機で違和感があれば
+   facingMode別のこの値を直接調整すること。 */
 const FOV_BY_FACING = { environment: 42, user: 40 };
 const camera = new THREE.PerspectiveCamera(FOV_BY_FACING.environment, 1, 0.05, 100);
 camera.position.set(0, 0, 0);
@@ -247,6 +143,23 @@ const environmentLighting = createEnvironmentLighting({
 
 // 足元の影(二重影+接触AO)は js/shadow-rig.js に委譲(Sprint 1 Task 2)。
 const shadowRig = createShadowRig(scene);
+
+/* ============================================================
+   環境解析(GPS/太陽位置/カメラ画像解析)
+   ------------------------------------------------------------
+   2026/07 新規追加。GPS取得の許可はユーザーから明示的に得た。
+   レンダリングへの統合は、applyPlacement()内でshadow-rig.jsの
+   azimuthConfidence(屋内外判定による光源方向ヒントの信頼度)として
+   接続済み(このアプリにおける環境解析の最初の実際の反映ポイント)。
+   lighting.js/postfx.jsへのさらなる統合は、AI開発憲法4章の「1時間
+   ルール」(1度に反映する範囲を人間がレビューできる規模に抑える)に
+   従い、段階的に検証しながら進める方針とする。
+   CONSTRAINTS.mdの「AIによる環境認識」節はまだ正式な対象内格上げの
+   承認を経ていない点は変わらないため、この統合はドラフト運用として
+   扱い、問題なければCONSTRAINTS.md改訂+ADR追記で正式化すること。
+   ============================================================ */
+const envAnalyzer = createEnvironmentAnalyzer({ video, useGps: true });
+let envAnalyzerLogTimer = null;
 
 /* ============================================================
    キャラクターの抽象化・材質調整・ロード処理は js/character.js に委譲。
@@ -341,12 +254,6 @@ tuneCopyBtn.addEventListener('click', () => poseTuner.copyJSON());
    配置の反映
    ============================================================ */
 function applyPlacement() {
-  // 距離(奥行き)スライダーの表示は、キャラクター読み込み前でも(2本指ドラッグ同様に)
-  // placement.zの変更に追従させたいので、activeCharacterのnullチェックより前に行う。
-  const distanceFromCamAlways = Math.abs(placement.z - camera.position.z);
-  if (depthSlider) depthSlider.value = String(placement.z);
-  if (depthLabel) depthLabel.textContent = `${distanceFromCamAlways.toFixed(1)}m`;
-
   if (!activeCharacter) return;
   activeCharacter.setTransform(placement);
   const footY = activeCharacter.getFootY();
@@ -355,13 +262,32 @@ function applyPlacement() {
   // 距離が初めて意味を持つようになった。距離に応じた空気遠近法
   // (彩度・コントラスト・輪郭線の減衰)と、影の距離フェードの両方で
   // 同じ距離値を使う(atmosphere.js側のNEAR_M〜FAR_Mが単一の基準になる)。
-  const distanceFromCam = distanceFromCamAlways;
+  const distanceFromCam = Math.abs(placement.z - camera.position.z);
+
+  // 環境解析(GPS/太陽位置/カメラ画像解析)による屋内外推定を、影の光源方向
+  // ヒントの信頼度としてのみ反映する(environment-analyzer.jsの最初の実際の
+  // レンダリング統合ポイント)。屋内では実際の照明方向は太陽方位角と無関係
+  // であり、かつlighting.jsの輝度重心法による方向推定は屋内でこそ外れやすい
+  // ことがSPRINT_1_REPORT.mdで既知の限界として記録されている。よって屋内と
+  // 判定された場合はshadow-rig.js側の光源方向ヒント(既にごく弱い効果として
+  // 実装済み、外側soft影のみ)をさらに大きく減衰させる。屋外と判定された
+  // 場合は、outdoorScoreに応じた信頼度(下限0.4)で従来通りの強さに近づける。
+  // GPS/太陽位置そのもの(sunAzimuth)はまだシーン座標系にマッピングして
+  // いない(端末の絶対方位[コンパス]を取得していないため、意味のある変換が
+  // できない。既知の制約として残す)。lighting.js/postfx.jsへの統合は
+  // 別途、確認しながら段階的に進める。
+  const envState = envAnalyzer.getState();
+  const azimuthConfidence = envState.environmentType === 'indoor'
+    ? 0.15
+    : THREE.MathUtils.clamp(envState.outdoorScore / 100, 0.4, 1.0);
+
   shadowRig.update(
     footY, width, placement,
     environmentLighting.getEstimatedAzimuthDeg(),
     environmentLighting.getBrightnessFactor(),
     distanceFromCam,
-    camera.position
+    camera.position,
+    azimuthConfidence
   );
   applyAtmosphericPerspective(activeCharacter.root, distanceFromCam);
 }
@@ -495,34 +421,41 @@ function stopCamera() {
 }
 function onVideoMeta() {
   sizeStageToVideo(video.videoWidth || 1080, video.videoHeight || 1920);
+  logProjectionConsistency();
 }
-// 2026/07 修正: 以前はvideoのアスペクト比に#stageを合わせる「contain方式」だった
-// ため、画面比率(iPhoneのstandalone表示は縦長19.5:9程度)とvideoの比率(16:9)が
-// 合わないと上下(または左右)に黒帯ができていた。#stageを常に画面いっぱいに広げ、
-// #camera-video側のCSS(object-fit:cover、style.cssで設定済み)で映像の余分を
-// トリミングする「cover方式」に変更する。three.js側のカメラも画面のアスペクト比
-// (video比率ではなく)に合わせることで、3Dモデルの見え方とプレビューの映像の
-// 見切れ方を一致させる。
-// 注意: この変更によりcapture()/recordFrameLoop()側でも同じcover方式のクロップを
-// 再現する必要がある(そうしないと「見えている通りに撮れない」ズレが生じる)。
+
+/* ============================================================
+   投影整合性チェック(AR精度検証項目①)
+   ------------------------------------------------------------
+   「Three.jsの投影行列がスマートフォン実カメラの画角と一致しているか」
+   を、レンダリング結果を見ずに数値だけで確認する。video本来の
+   アスペクト比・#stageの実測アスペクト比・camera.aspect/camera.fovを
+   突き合わせ、object-fit:coverによるクロップが実際に発生しているか、
+   発生している場合にcamera.fovが正しく補正されているかを判定する。
+   詳細な計算はjs/camera-projection.js参照。
+   ============================================================ */
+function logProjectionConsistency() {
+  if (!video.videoWidth) return;
+  const report = verifyProjectionConsistency({
+    video, stageEl: stage, camera,
+    baseVerticalFovDeg: FOV_BY_FACING[facingMode],
+  });
+  console.log('[camera-projection] 投影整合性チェック:', report);
+}
+// コンソールから手動で再確認したい時用(実機Safariのリモートデバッグ等で使用)
+window.__verifyProjection = logProjectionConsistency;
+window.__envAnalyzerState = () => envAnalyzer.getState();
 function sizeStageToVideo(vw, vh) {
+  const aspect = vw / vh;
   const wrapRect = stageWrap.getBoundingClientRect();
-  const w = wrapRect.width, h = wrapRect.height;
+  let w = wrapRect.width, h = w / aspect;
+  if (h > wrapRect.height) { h = wrapRect.height; w = h * aspect; }
   stage.style.width = `${w}px`;
   stage.style.height = `${h}px`;
-  renderer.setSize(w, h, false);
+  renderer.setSize(vw, vh, false);
   canvas.style.width = '100%';
   canvas.style.height = '100%';
-  camera.aspect = w / h;
-  // 2026/07修正: 以前はvw/vh(動画のネイティブ解像度)を受け取りながら
-  // 一切使っておらず、camera.fovは常にFOV_BY_FACINGの決め打ち値のままだった。
-  // object-fit:coverのクロップ方向(左右クロップか上下クロップか)は
-  // 動画のネイティブアスペクト比と画面アスペクト比の大小関係で変わり、
-  // それによって実際に画面へ映る垂直画角も変わるため、ここで都度
-  // 正しく計算し直す(詳細はcomputeCoveredVerticalFovDeg()のコメント参照)。
-  const diagonalFov = DIAGONAL_FOV_DEG_BY_FACING[facingMode];
-  const coveredVFov = computeCoveredVerticalFovDeg(diagonalFov, vw, vh, w, h);
-  if (coveredVFov !== null) camera.fov = coveredVFov;
+  camera.aspect = aspect;
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', () => {
@@ -562,30 +495,6 @@ const MAX_CHARACTER_DISTANCE_Z = -0.8;
 // 奥行きの変化は横移動より体感しにくいため気持ち強めにしている。
 const DEPTH_DRAG_GAIN = 1.3;
 
-/* ------------------------------------------------------------
-   距離(奥行き)調整バー
-   ------------------------------------------------------------
-   2本指縦ドラッグは奥行きを動かせるが、数十m先など遠距離での
-   微調整には指の感度だけでは狙った位置に正確に合わせづらい。
-   このスライダーはplacement.zを直接、上のMIN/MAX_CHARACTER_DISTANCE_Z
-   の範囲で操作できるようにしたもので、2本指ドラッグと同じ状態
-   (placement.z)を共有する。値はapplyPlacement()側で常に同期される
-   ため、指ジェスチャーで動かした後もスライダーの位置がズレない。
-   ------------------------------------------------------------ */
-if (depthSlider) {
-  depthSlider.min = String(MIN_CHARACTER_DISTANCE_Z);
-  depthSlider.max = String(MAX_CHARACTER_DISTANCE_Z);
-  depthSlider.step = '0.1';
-  depthSlider.addEventListener('input', () => {
-    placement.z = THREE.MathUtils.clamp(
-      parseFloat(depthSlider.value),
-      MIN_CHARACTER_DISTANCE_Z,
-      MAX_CHARACTER_DISTANCE_Z
-    );
-    applyPlacement();
-  });
-}
-
 // 2本指ジェスチャーが「拡縮/回転(planar)」なのか「奥行き移動(depth)」なのかを
 // 判定してロックするまでの猶予(px)。人間が指を広げて拡大しようとする動作は、
 // 中点(2点の中間座標)がわずかに上下にブレるのが普通で、この揺れをそのまま
@@ -608,33 +517,48 @@ function touchAngle(t0, t1) { return Math.atan2(t1.clientY - t0.clientY, t1.clie
 function touchMidY(t0, t1) { return (t0.clientY + t1.clientY) / 2; }
 function normalizeAngle(a) { a = (a + Math.PI) % (2 * Math.PI); if (a < 0) a += 2 * Math.PI; return a - Math.PI; }
 
+const _floorRaycaster = new THREE.Raycaster();
 /**
- * タップされた画面上の位置へキャラクターを再配置する(左右移動のみ)。
+ * 画面上の1点(clientX/Y)を、キャラクターが「今すでに立っている高さ」と
+ * 同じ水平面に投影し、そのワールド座標(x,z)を返す。
  *
- * 【2026/07 設計変更】以前はタップ位置から3Dレイを飛ばし、床平面との
- * 交点を求める方式(camera.quaternion経由、ジャイロ推定姿勢に依存)を
- * 使っていた。しかし実機検証で「Distance: 31.32m」等の異常値が確認され、
- * 調査の結果、根本原因は「camera.quaternion(ジャイロ推定姿勢)自体の
- * 精度が保証されていない」という構造的な問題だと判明した。レイ・平面
- * 交差の式 t=(floorY-origin.y)/dir.y は、dir.y(視線の上下成分)が姿勢
- * 推定の誤差でわずかにズレただけでtが暴れる(dir.yが0に近づくほど発散
- * する)性質を持ち、上限クランプは症状を隠すだけで解決にならなかった。
+ * カメラの実際の高さ(地面からの距離)は分からないため、それを仮定で
+ * 決め打ちすると外した時に浮く/沈む原因になる。代わりに「床は水平で、
+ * 今のキャラの足元と同じ高さで続いている」という仮定だけを使うことで、
+ * カメラ高さの推定を一切必要とせず、今すでに接地できている状態からの
+ * 再配置に限って頑丈に機能する。
  *
- * そのため、位置決めからカメラの姿勢(camera.quaternion)への依存を
- * 完全に排除した。奥行き(z)は変更せず、1本指ドラッグと同じ計算方式
- * (画面中央からのオフセットpx→現在の奥行きでのワールド幅に変換)で
- * 左右位置のみを動かす。これによりカメラの回転に一切依存しなくなり、
- * 「その場所には配置できません」というエラー自体も構造的に発生しなくなる。
+ * @returns {THREE.Vector3|null} 交点のワールド座標。カメラが上を向いている等で
+ *   床と交わらない場合はnull。
  */
-function placeCharacterAtScreenPoint(clientX) {
+function computeFloorPointFromScreen(clientX, clientY) {
+  if (!activeCharacter) return null;
   const rect = stage.getBoundingClientRect();
-  const distance = Math.abs(placement.z - camera.position.z);
-  const vFovRad = THREE.MathUtils.degToRad(camera.fov);
-  const worldPerPixelY = (2 * Math.tan(vFovRad / 2) * distance) / rect.height;
-  const centerX = rect.left + rect.width / 2;
-  const offsetPx = clientX - centerX;
-  placement.x = camera.position.x + offsetPx * worldPerPixelY;
-  // placement.z(奥行き)は変更しない。奥行きの変更は2本指縦ドラッグのみが担当する。
+  const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+  const ndcY = -(((clientY - rect.top) / rect.height) * 2 - 1);
+  _floorRaycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
+  const floorY = activeCharacter.getFootY();
+  const origin = _floorRaycaster.ray.origin;
+  const dir = _floorRaycaster.ray.direction;
+  if (Math.abs(dir.y) < 1e-5) return null; // 床とほぼ平行な視線では交点が求まらない
+  const t = (floorY - origin.y) / dir.y;
+  if (t <= 0.05) return null; // 交点がカメラの後ろ、あるいは極端に近すぎる(=上向きの視線)
+  return origin.clone().addScaledVector(dir, t);
+}
+
+/**
+ * タップされた床の位置へキャラクターを再配置する。footYは変化しない
+ * (x/zの平行移動のみで、rotation/scaleは変えないため)ので、
+ * 常に「今の接地の高さ」を保ったまま位置だけを移せる。
+ */
+function placeCharacterAtScreenPoint(clientX, clientY) {
+  const hit = computeFloorPointFromScreen(clientX, clientY);
+  if (!hit) {
+    showPoseToast('その場所には配置できません');
+    return;
+  }
+  placement.x = hit.x;
+  placement.z = hit.z;
   applyPlacement();
   showPoseToast('この場所に配置しました');
 }
@@ -676,9 +600,6 @@ stage.addEventListener('touchmove', (e) => {
     const worldPerPixelY = (2 * Math.tan(vFovRad / 2) * distance) / rect.height;
     placement.x += dx * worldPerPixelY;
     placement.y -= dy * worldPerPixelY;
-    // ユーザーが縦方向に指を動かしてY座標を直接調整した場合、GCEによる
-    // 自動追従(placement.y = ground.floorY)より手動操作を優先する。
-    if (dy !== 0) userAdjustedGroundY = true;
     applyPlacement();
   } else if (touchState.mode === 'gesture' && e.touches.length >= 2) {
     const dist = touchDist(e.touches[0], e.touches[1]);
@@ -738,7 +659,7 @@ stage.addEventListener('touchend', (e) => {
     const movedPx = Math.hypot(t.clientX - touchState.startX, t.clientY - touchState.startY);
     const elapsedMs = Date.now() - touchState.startTime;
     if (movedPx <= TAP_MAX_MOVE_PX && elapsedMs <= TAP_MAX_DURATION_MS) {
-      placeCharacterAtScreenPoint(t.clientX);
+      placeCharacterAtScreenPoint(t.clientX, t.clientY);
     }
   }
   if (e.touches.length === 0) touchState.mode = null;
@@ -750,16 +671,14 @@ stage.addEventListener('touchend', (e) => {
 
 resetBtn.addEventListener('click', () => {
   Object.assign(placement, DEFAULT_PLACEMENT);
-  userAdjustedGroundY = false; // GCEによる床への自動追従を再開する
   applyPlacement();
   reanchorGyro();
 });
 
 switchCamBtn.addEventListener('click', async () => {
   facingMode = facingMode === 'environment' ? 'user' : 'environment';
-  // camera.fovは新しいストリームのloadedmetadata発火時にonVideoMeta()→
-  // sizeStageToVideo()経由で、実際のネイティブ解像度を元に正しく
-  // 再計算される(DIAGONAL_FOV_DEG_BY_FACING[facingMode]を参照)。
+  camera.fov = FOV_BY_FACING[facingMode];
+  camera.updateProjectionMatrix();
   await startCamera();
   environmentLighting.start();
 });
@@ -856,39 +775,16 @@ function runCountdown(seconds) {
 let lastIsVideo = false;
 let isVideoMode = false;
 
-// #camera-videoのCSS(object-fit:cover)と同じ計算で、動画のどの矩形範囲が
-// 実際に画面に表示されているかを求める(sizeStageToVideoのcover方式化とセットの修正)。
-function computeCoverCrop(srcW, srcH, dstW, dstH) {
-  const srcAspect = srcW / srcH, dstAspect = dstW / dstH;
-  let sx, sy, sw, sh;
-  if (srcAspect > dstAspect) { sh = srcH; sw = srcH * dstAspect; sx = (srcW - sw) / 2; sy = 0; }
-  else { sw = srcW; sh = srcW / dstAspect; sx = 0; sy = (srcH - sh) / 2; }
-  return { sx, sy, sw, sh };
-}
-
 function capture() {
   effect.render(scene, camera);
-  // 2026/07 バグ修正: 以前はstageRect(CSSピクセル、例:390×844)を出力解像度に
-  // 使っていたが、renderer.domElementの実際の描画バッファはdevicePixelRatio
-  // 分だけ大きい(例:780×1688、DPR=2の場合)。drawImage(renderer.domElement,
-  // 0,0,outW,outH)はこの大きいバッファを小さいoutW×outHへ「縮小描画」して
-  // いたことになり、Canvas2Dの単純な縮小リサンプリングは木目やカーテンの
-  // 縞模様のような高周波パターンでモアレ(虹色の縦縞)を起こしやすいことが
-  // 知られている。実機写真で報告された色付き縞模様はこれが原因である
-  // 可能性が高いため、renderer.domElement.width/height(実ピクセル解像度)を
-  // そのまま出力解像度として使い、3Dレイヤーを等倍描画(リサンプリングなし)に
-  // 変更した。副次効果として、写真の解像度も従来のCSSピクセル基準より
-  // 高くなる(画質向上)。
-  const outW = renderer.domElement.width;
-  const outH = renderer.domElement.height;
-  const { sx, sy, sw, sh } = computeCoverCrop(video.videoWidth, video.videoHeight, outW, outH);
+  const vw = video.videoWidth, vh = video.videoHeight;
   const out = document.createElement('canvas');
-  out.width = outW; out.height = outH;
+  out.width = vw; out.height = vh;
   const ctx = out.getContext('2d');
-  if (facingMode === 'user') { ctx.translate(outW, 0); ctx.scale(-1, 1); }
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
+  if (facingMode === 'user') { ctx.translate(vw, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(video, 0, 0, vw, vh);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.drawImage(renderer.domElement, 0, 0, outW, outH);
+  ctx.drawImage(renderer.domElement, 0, 0, vw, vh);
   // 写真としての仕上げ処理(ビネット/グレイン/色収差/疑似ブルーム/カラーグレーディング)。
   // ライブプレビューには適用せず、撮影結果にのみ1回だけ適用する設計
   // (詳細はjs/postfx.js冒頭のコメント参照)。環境光推定の平均色をティントとして渡し、
@@ -946,18 +842,14 @@ function pickSupportedMime() {
 function recordFrameLoop() {
   if (!isRecording) return;
   const vw = video.videoWidth, vh = video.videoHeight;
-  // capture()と同じ理由(DPRスケールされた実ピクセル解像度を使い、
-  // Canvas2Dの縮小リサンプリングによるモアレを避ける)。
-  const targetW = renderer.domElement.width, targetH = renderer.domElement.height;
-  if (vw && (recordCanvas.width !== targetW || recordCanvas.height !== targetH)) {
-    recordCanvas.width = targetW; recordCanvas.height = targetH;
+  if (vw && (recordCanvas.width !== vw || recordCanvas.height !== vh)) {
+    recordCanvas.width = vw; recordCanvas.height = vh;
   }
   if (vw) {
-    const { sx, sy, sw, sh } = computeCoverCrop(vw, vh, targetW, targetH);
-    if (facingMode === 'user') { recordCtx.save(); recordCtx.translate(targetW, 0); recordCtx.scale(-1, 1); }
-    recordCtx.drawImage(video, sx, sy, sw, sh, 0, 0, targetW, targetH);
+    if (facingMode === 'user') { recordCtx.save(); recordCtx.translate(vw, 0); recordCtx.scale(-1, 1); }
+    recordCtx.drawImage(video, 0, 0, vw, vh);
     if (facingMode === 'user') recordCtx.restore();
-    recordCtx.drawImage(renderer.domElement, 0, 0, targetW, targetH);
+    recordCtx.drawImage(renderer.domElement, 0, 0, vw, vh);
   }
   recordLoopId = requestAnimationFrame(recordFrameLoop);
 }
@@ -1081,33 +973,6 @@ function animate() {
     const t = 1 - Math.pow(2, -dt / halfLife);
     camera.quaternion.slerp(targetDelta, t);
   }
-
-  // Ground Confidence Engine: 床推定ロジック自体はground-estimator.js側に
-  // 集約されており、ここではupdate()呼び出しと結果の反映のみを行う。
-  groundEstimator.update();
-  const ground = groundEstimator.getGround();
-  if (!userAdjustedGroundY && Number.isFinite(ground.floorY)) {
-    // floorYはキャリブレーション時に一度算出される固定値なので、値が実際に
-    // 変化した時だけplacement.y反映+applyPlacement()を行う(毎フレームの
-    // 無駄な再計算を避ける)。
-    if (lastAppliedFloorY === null || Math.abs(ground.floorY - lastAppliedFloorY) > 0.001) {
-      placement.y = ground.floorY;
-      lastAppliedFloorY = ground.floorY;
-      applyPlacement();
-    }
-  }
-  if (DEBUG_GROUND && groundDebugValue) {
-    groundDebugValue.textContent = `${Math.round(ground.confidence * 100)}%`;
-    if (groundDebugDistance) {
-      const distanceM = Math.abs(placement.z - camera.position.z);
-      groundDebugDistance.textContent = `${distanceM.toFixed(2)} m`;
-    }
-    if (groundDebugHeight && activeCharacter) {
-      const heightM = activeCharacter.getHeight();
-      groundDebugHeight.textContent = `${heightM.toFixed(2)} m`;
-    }
-  }
-
   if (activeCharacter) activeCharacter.update(dt);
   effect.render(scene, camera);
 }
@@ -1137,38 +1002,6 @@ function initCharacterSelect() {
 }
 initCharacterSelect();
 
-/* ============================================================
-   床キャリブレーション画面(Ground Confidence Engine Step2)
-   ------------------------------------------------------------
-   起動直後、未キャリブレーションの場合のみ一度だけ表示する。
-   カメラ映像は既に起動済みの状態で見せ、画面中央の水平ラインを
-   実際の床に合わせてもらってからOKを押してもらう。
-   ============================================================ */
-function showGroundCalibration() {
-  return new Promise((resolve) => {
-    // 前回確認済みの高さ(なければデフォルト150cm)を初期値として表示する。
-    const initialCm = groundEstimator.getCameraHeightCm();
-    if (groundCalibHeightSlider) groundCalibHeightSlider.value = String(initialCm);
-    if (groundCalibHeightValue) groundCalibHeightValue.textContent = `${initialCm}cm`;
-
-    const onSliderInput = () => {
-      if (groundCalibHeightValue) groundCalibHeightValue.textContent = `${groundCalibHeightSlider.value}cm`;
-    };
-    if (groundCalibHeightSlider) groundCalibHeightSlider.addEventListener('input', onSliderInput);
-
-    groundCalibScreen.classList.add('show');
-    const onOk = () => {
-      const cm = groundCalibHeightSlider ? parseFloat(groundCalibHeightSlider.value) : GroundEstimator.DEFAULT_CAMERA_HEIGHT_CM;
-      groundEstimator.calibrate(cm / 100);
-      groundCalibScreen.classList.remove('show');
-      groundCalibOkBtn.removeEventListener('click', onOk);
-      if (groundCalibHeightSlider) groundCalibHeightSlider.removeEventListener('input', onSliderInput);
-      resolve();
-    };
-    groundCalibOkBtn.addEventListener('click', onOk);
-  });
-}
-
 startBtn.addEventListener('click', async () => {
   startError.textContent = '';
   try {
@@ -1178,13 +1011,17 @@ startBtn.addEventListener('click', async () => {
     if (motionOK) enableMotionTracking();
     await startCamera();
     startScreen.style.display = 'none';
-    groundEstimator.start();
-    // 2026/07 修正: 以前は初回のみ(未キャリブレーション時のみ)実行していたが、
-    // 持ち方・設置状況は毎回変わるため、起動のたびに必ずキャリブレーションを
-    // 行うよう変更した(ユーザー指示に基づく)。
-    await showGroundCalibration();
     loadCharacter(CHARACTERS[currentCharacterIndex]);
     environmentLighting.start();
+
+    // 環境解析(GPS/太陽位置/カメラ画像解析)をログのみモードで開始。
+    // GPS使用はユーザーから明示的に許可を得た上での追加(2026/07)。
+    // レンダリング・ライティングへは一切接続していない(上部の注記参照)。
+    envAnalyzer.start();
+    clearInterval(envAnalyzerLogTimer);
+    envAnalyzerLogTimer = setInterval(() => {
+      console.log('[env-analyzer]', envAnalyzer.getState());
+    }, 5000);
   } catch (err) {
     // エラーメッセージは startCamera 内で表示済み
   }
