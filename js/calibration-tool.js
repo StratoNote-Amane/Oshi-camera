@@ -33,7 +33,7 @@ import * as THREE from 'three';
 
 // 検証する距離プリセット(m)。実際の想定撮影距離(無人駅の対向ホーム
 // 想定20m)をカバーするよう、近距離〜20m超まで並べる。
-const TEST_DISTANCES_M = [2, 5, 10, 15, 20, 25];
+export const TEST_DISTANCES_M = [2, 5, 10, 15, 20, 25];
 
 /**
  * 理論上の見かけの高さ(px)を、ピンホールカメラモデルで計算する。
@@ -48,7 +48,7 @@ const TEST_DISTANCES_M = [2, 5, 10, 15, 20, 25];
  * @param {number} verticalFovDeg camera.fov(度、three.jsでは垂直画角)
  * @param {number} rendererHeightPx 出力(video/canvas)の高さ(px)
  */
-function theoreticalPixelHeight(realHeightMeters, distanceMeters, verticalFovDeg, rendererHeightPx) {
+export function theoreticalPixelHeight(realHeightMeters, distanceMeters, verticalFovDeg, rendererHeightPx) {
   const halfFovRad = THREE.MathUtils.degToRad(verticalFovDeg / 2);
   // 距離distanceMetersにおいて画面全体が覆う実世界の高さ(m)
   const visibleWorldHeightAtDistance = 2 * distanceMeters * Math.tan(halfFovRad);
@@ -63,7 +63,7 @@ function theoreticalPixelHeight(realHeightMeters, distanceMeters, verticalFovDeg
  * 描画しているか」そのものであり、レンダリング結果を目視せずに
  * 数値として取得できる。
  */
-function projectedPixelHeight(root, camera, rendererHeightPx) {
+export function projectedPixelHeight(root, camera, rendererHeightPx) {
   const box = new THREE.Box3().setFromObject(root);
   if (box.isEmpty()) return null;
 
@@ -93,7 +93,104 @@ function projectedPixelHeight(root, camera, rendererHeightPx) {
 }
 
 /**
- * 較正パネルを構築する。
+ * 距離較正テストの本体。DOM非依存(コンソールから直接呼び出す用途にも使える)。
+ *
+ * 【2026/07 重要な修正】
+ * 当初の実装は「placement.z = camera.position.z - d」として、カメラの
+ * z座標からの単純な差分を距離とみなしていた。これはカメラが原点付近から
+ * ワールド-Z方向を向いている場合(main.jsの実カメラ、静止時)にのみ正しく、
+ * dev.htmlのOrbitControlsカメラ(斜め上の位置から原点付近を見下ろす)では
+ * 前提が崩れ、指定した距離dと実際のカメラ視線方向の深度が一致しなくなる
+ * (dが小さいほど実深度がdより大きく、dが大きいほど実深度がdより小さくなる
+ * 方向にズレる。実際にdev.htmlで比率が0.925→1.130と単調に伸びる結果が
+ * 出たのはこれが原因だった)。
+ *
+ * 修正: キャラクターを配置した後の実際のワールド座標から、カメラの
+ * 実際の前方ベクトル(camera.getWorldDirection())への射影(=視線方向の
+ * 深度、ピンホール投影の式が本来必要とする量)を毎回計算し直し、
+ * 理論値の計算にはその実測深度を使う。これによりカメラの向き・位置に
+ * 依存せず正しく検証できる(main.js・dev.htmlのどちらでも同じ関数が使える)。
+ *
+ * @param {object} args
+ * @param {THREE.PerspectiveCamera} args.camera
+ * @param {THREE.WebGLRenderer} args.renderer
+ * @param {object} args.character MMDCharacter/SpriteCharacter
+ * @param {object} args.placement {x,y,z,rotY,scale} (呼び出し前後でzを書き換えて戻す)
+ * @param {() => void} args.applyPlacement
+ * @param {number} [args.realHeightMeters=1.6]
+ * @param {number[]} [args.distances=TEST_DISTANCES_M]
+ * @returns {{ lines: string[], rows: object[], maxFootYDriftMm: number }}
+ */
+export function runDistanceCalibration({ camera, renderer, character, placement, applyPlacement, realHeightMeters = 1.6, distances = TEST_DISTANCES_M }) {
+  const rendererHeightPx = renderer.domElement.height || renderer.getSize(new THREE.Vector2()).y;
+  const originalZ = placement.z;
+
+  const forward = new THREE.Vector3();
+  camera.getWorldDirection(forward); // 正規化済み、カメラの実際の前方ベクトル(ワールド空間)
+
+  const lines = [];
+  const rows = [];
+  lines.push('指定d(m) 実深度(m) 理論px   実測px   比率     footY(m)  footYずれ(mm)');
+  let baselineFootY = null;
+  let maxFootYDriftMm = 0;
+
+  distances.forEach((d) => {
+    // 従来通り「カメラのz座標からd引いた位置」に置く(main.jsの実際の
+    // 配置ロジックと同じ考え方)。ただし理論値の計算には、この配置の
+    // 結果として実際に生じたカメラ視線方向の深度を別途測って使う
+    // (カメラが斜めを向いていても正しく評価できるようにするため)。
+    placement.z = camera.position.z - d;
+    applyPlacement();
+
+    const charWorldPos = new THREE.Vector3();
+    character.root.getWorldPosition(charWorldPos);
+    const toChar = charWorldPos.clone().sub(camera.position);
+    const viewDepth = toChar.dot(forward); // カメラ前方ベクトルへの射影 = 真の深度
+
+    const theoretical = viewDepth > 0
+      ? theoreticalPixelHeight(realHeightMeters, viewDepth, camera.fov, rendererHeightPx)
+      : NaN;
+    const actual = projectedPixelHeight(character.root, camera, rendererHeightPx);
+    const ratio = (actual != null && theoretical > 0) ? (actual / theoretical) : NaN;
+
+    // GroundEstimator相当のチェック(AR精度検証項目②)。
+    const footY = character.getFootY();
+    if (baselineFootY === null) baselineFootY = footY;
+    const driftMm = Math.abs(footY - baselineFootY) * 1000;
+    maxFootYDriftMm = Math.max(maxFootYDriftMm, driftMm);
+
+    rows.push({ d, viewDepth, theoretical, actual, ratio, footY, driftMm });
+    lines.push(
+      `${String(d).padStart(7)}  ${viewDepth.toFixed(2).padStart(8)}  ${theoretical.toFixed(1).padStart(6)}   ` +
+      `${(actual == null ? 'N/A' : actual.toFixed(1)).padStart(6)}   ` +
+      `${(isNaN(ratio) ? '—' : ratio.toFixed(3)).padStart(6)}   ` +
+      `${footY.toFixed(4).padStart(7)}   ${driftMm.toFixed(3)}`
+    );
+  });
+
+  lines.push('');
+  lines.push(
+    maxFootYDriftMm < 1
+      ? `✓ footY(接地高さ)は全距離で一定(最大ずれ ${maxFootYDriftMm.toFixed(4)}mm、浮動小数点誤差の範囲内)`
+      : `⚠ footYが距離とともにずれています(最大 ${maxFootYDriftMm.toFixed(2)}mm)。` +
+        `position.z以外の値が意図せず変化している可能性があります。`
+  );
+  lines.push(
+    '注記: 「指定d」はplacement.zへ渡した値、「実深度」はカメラの実際の前方ベクトルへの' +
+    '射影(真の値)。カメラが原点付近からワールド-Z方向を向いている場合(main.jsの静止時)は' +
+    '両者はほぼ一致する。dev.htmlのOrbitControlsのように斜めの位置・向きのカメラでは' +
+    '両者がズレるのが正常(バグではない)。比率の妥当性は必ず「実深度」列を基準に判断すること。'
+  );
+
+  // 測定終了後は必ず元の距離へ戻す(このツールが見た目に影響を残さないため)
+  placement.z = originalZ;
+  applyPlacement();
+
+  return { lines, rows, maxFootYDriftMm };
+}
+
+/**
+ * 較正パネルを構築する(dev.html用のUIラッパー)。
  * @param {HTMLElement} container
  * @param {object} deps
  * @param {THREE.PerspectiveCamera} deps.camera
@@ -115,8 +212,9 @@ export function buildCalibrationPanel(container, { camera, renderer, getCharacte
     <button id="calib-run-btn" class="dsp-btn">距離ごとに検証を実行</button>
     <div id="calib-results" style="margin-top:10px; font-size:11px; color:#cfd3de; line-height:1.7; font-family:monospace; white-space:pre"></div>
     <div class="dsp-info" style="margin-top:8px">
-      比率(実測/理論)が全距離で1.0付近 → 投影は正しく、原因は別箇所(video側のcover/crop、
-      unitToMeter、getWidth()等)。距離が伸びるほど1.0から乖離 → 投影/深度側の距離依存バグ。
+      「実深度」基準の比率が全距離で1.0付近 → 投影は正しく、原因は別箇所(video側のcover/crop、
+      unitToMeter、getWidth()等)。実深度が伸びるほど比率が1.0から乖離 → 投影/深度側の距離依存バグ。
+      dev.htmlはOrbitControlsで視点が斜めのため、main.jsの実カメラでの再検証を推奨。
       このツールは数値を表示するだけで、見た目やスケールには一切手を加えない。
     </div>
   `;
@@ -132,57 +230,8 @@ export function buildCalibrationPanel(container, { camera, renderer, getCharacte
       return;
     }
     const realHeightMeters = parseFloat(heightInput.value) || 1.6;
-    const rendererHeightPx = renderer.domElement.height || renderer.getSize(new THREE.Vector2()).y;
-    const originalZ = placement.z;
-
-    const lines = [];
-    lines.push('距離(m)  理論px   実測px   比率     footY(m)   footYずれ(mm)');
-    let baselineFootY = null;
-    let maxFootYDriftMm = 0;
-    TEST_DISTANCES_M.forEach((d) => {
-      // カメラは基本z=0付近にいる想定(main.jsのcamera.position.set(0,0,0)、
-      // フレーミング切替時のみcamZが動く)。カメラの実際のz位置を基準に、
-      // 「カメラから見てdメートル奥」の位置へ一時的に配置する。
-      placement.z = camera.position.z - d;
-      applyPlacement();
-
-      const theoretical = theoreticalPixelHeight(realHeightMeters, d, camera.fov, rendererHeightPx);
-      const actual = projectedPixelHeight(character.root, camera, rendererHeightPx);
-      const ratio = (actual != null && theoretical > 0) ? (actual / theoretical) : NaN;
-
-      // GroundEstimator相当のチェック(AR精度検証項目②「足裏が床から浮かない/
-      // 沈まない/距離に比例して誤差が増えない」への対応)。
-      // character.getFootY()はBox3(bind-poseの静的AABBを現在のtransformで
-      // 変換したもの)から算出している(character.js参照)。position.zのみを
-      // 変えて position.y は変えていないので、理論上は距離によらず
-      // 完全に一定の値になるはず(数式的に自明)。ここではその不変性を
-      // 実際に計測し、浮動小数点誤差以上のドリフトが無いかを確認する。
-      const footY = character.getFootY();
-      if (baselineFootY === null) baselineFootY = footY;
-      const driftMm = Math.abs(footY - baselineFootY) * 1000;
-      maxFootYDriftMm = Math.max(maxFootYDriftMm, driftMm);
-
-      lines.push(
-        `${String(d).padStart(6)}   ${theoretical.toFixed(1).padStart(6)}   ` +
-        `${(actual == null ? 'N/A' : actual.toFixed(1)).padStart(6)}   ` +
-        `${(isNaN(ratio) ? '—' : ratio.toFixed(3)).padStart(6)}   ` +
-        `${footY.toFixed(4).padStart(8)}   ${driftMm.toFixed(3)}`
-      );
-    });
-
-    lines.push('');
-    lines.push(
-      maxFootYDriftMm < 1
-        ? `✓ footY(接地高さ)は全距離で一定(最大ずれ ${maxFootYDriftMm.toFixed(4)}mm、浮動小数点誤差の範囲内)`
-        : `⚠ footYが距離とともにずれています(最大 ${maxFootYDriftMm.toFixed(2)}mm)。` +
-          `position.z以外の値が意図せず変化している可能性があります。`
-    );
-
-    // 測定終了後は必ず元の距離へ戻す(このツールが見た目に影響を残さないため)
-    placement.z = originalZ;
-    applyPlacement();
-
-    resultsEl.textContent = lines.join('\n');
-    console.log('[calibration-tool] results:\n' + lines.join('\n'));
+    const result = runDistanceCalibration({ camera, renderer, character, placement, applyPlacement, realHeightMeters });
+    resultsEl.textContent = result.lines.join('\n');
+    console.log('[calibration-tool] results:\n' + result.lines.join('\n'));
   });
 }
