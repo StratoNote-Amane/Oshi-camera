@@ -11,6 +11,12 @@ import { createPoseTuner } from './js/pose-ui.js';
 import { createEnvironmentAnalyzer } from './js/environment-analyzer.js';
 import { verifyProjectionConsistency } from './js/camera-projection.js';
 import { runDistanceCalibration } from './js/calibration-tool.js';
+import { createDebugConsole } from './js/debug-console.js';
+
+// Web Inspector(Mac+ケーブル)が使えない状況向けの画面内デバッグコンソール。
+// 最初に呼ぶことで、以降のconsole.log/warn/errorをすべて捕捉する
+// (character.jsのunitToMeter逆算ログ、env-analyzerの定期ログ等も含む)。
+createDebugConsole();
 
 let currentCharacterIndex = 0;
 
