@@ -12,6 +12,53 @@ const _tmpEuler = new THREE.Euler();
 const _tmpQuat = new THREE.Quaternion();
 
 /* ============================================================
+   実寸スケールの決定方式(2026/07改訂)
+   ------------------------------------------------------------
+   【背景】
+   従来は「PMXの単位慣習(1ユニット≒8cm)」という未検証の仮定に基づく
+   固定値unitToMeter(=0.081)を、天音かなた・音乃瀬奏の両モデルに
+   共通で使い回していた(characters-data.js参照)。これは「AR精度検証」
+   の指摘の通り、実測ではなく推測に依存した設計だった。
+
+   【変更内容】
+   キャラクター定義(def)に targetHeightMeters(そのキャラクターの
+   設定上の実身長、m単位)が指定されている場合、モデル読み込み直後
+   (transform適用前のbind-pose状態)にメッシュの実際のバウンディング
+   ボックス高さ(PMX生の単位)を測定し、
+     computedUnitToMeter = targetHeightMeters / bindPoseHeightUnits
+   として動的に逆算する。これによりPMXの単位慣習が何であっても、
+   「そのキャラクターの実身長」という既知の事実から正しい実寸になる。
+
+   targetHeightMetersが未指定のdefに対しては、従来のunitToMeter
+   固定値へそのままフォールバックする(完全後方互換、既存の挙動を
+   変えない)。
+   ============================================================ */
+export function computeUnitToMeter(mesh, def) {
+  if (!def.targetHeightMeters) {
+    return def.unitToMeter; // 後方互換: 未設定なら従来の推測値のまま
+  }
+  // この時点でmeshにはまだtransform(position/rotation/scale)が
+  // 一切適用されていない(loadCharacter内でnew MMDCharacter()を呼ぶ
+  // 直前の状態)。Box3はbind-poseの生のジオメトリをそのまま反映する。
+  const box = new THREE.Box3().setFromObject(mesh);
+  const bindHeightUnits = box.max.y - box.min.y;
+  if (!(bindHeightUnits > 0) || !isFinite(bindHeightUnits)) {
+    console.warn(
+      `[character.js] ${def.id}: バインドポーズの高さが正しく測定できませんでした` +
+      `(box height=${bindHeightUnits})。unitToMeter固定値へフォールバックします。`
+    );
+    return def.unitToMeter;
+  }
+  const computed = def.targetHeightMeters / bindHeightUnits;
+  console.log(
+    `[character.js] ${def.id}: 実測バインド高さ=${bindHeightUnits.toFixed(4)}unit, ` +
+    `targetHeightMeters=${def.targetHeightMeters}m → 逆算unitToMeter=${computed.toFixed(5)} ` +
+    `(旧固定値=${def.unitToMeter})`
+  );
+  return computed;
+}
+
+/* ============================================================
    全体オフセット（基本ポーズ＋差分）の定義
    ------------------------------------------------------------
    ボーンを個別に選ぶ精密調整(createPoseTuner)とは別に、少数の
@@ -42,34 +89,7 @@ export const GLOBAL_OFFSET_PARAMS = [
 export class MMDCharacter {
   constructor(mesh, def) {
     this.root = mesh;
-    /* ============================================================
-       実寸の自己校正(2026/07修正)
-       ------------------------------------------------------------
-       以前はunitToMeterという固定値(「MMDの1ユニット≒8cm」という伝統的な
-       慣習に基づく想定値、0.081)を無条件に信用していたが、実機で
-       「遠近感を考慮しても明らかに小さすぎる」現象が報告された。
-       PMXの変換元がVRoid/VRM等の場合、ボーン座標が既にメートル単位に
-       近い規約で作られていることがあり、その場合は固定値0.081を掛けると
-       実寸より大きく縮んでしまう。
-       固定値を信用する代わりに、実際にロードされたモデルの生のバウンディング
-       ボックス高さ(bind-pose、スケール適用前)を実測し、既知の実身長
-       (def.targetHeightMeters)に一致するスケール係数をここで都度算出する。
-       これにより、モデルごとの内部単位規約の違いを自動的に吸収できる。
-       def.targetHeightMetersが未定義の場合のみ、後方互換のため
-       旧来のdef.unitToMeter固定値にフォールバックする。
-       ============================================================ */
-    const rawBox = new THREE.Box3().setFromObject(mesh);
-    const rawHeightUnits = Math.max(1e-6, rawBox.max.y - rawBox.min.y);
-    this._rawHeightUnits = rawHeightUnits; // デバッグ表示・検証用に保持
-    if (typeof def.targetHeightMeters === 'number') {
-      this.unitToMeter = def.targetHeightMeters / rawHeightUnits;
-      console.info(
-        `[character.js] ${def.name || def.id}: 生の高さ=${rawHeightUnits.toFixed(3)}units, ` +
-        `目標身長=${def.targetHeightMeters}m → 自動算出unitToMeter=${this.unitToMeter.toFixed(5)}`
-      );
-    } else {
-      this.unitToMeter = def.unitToMeter || 0.081;
-    }
+    this.unitToMeter = computeUnitToMeter(mesh, def);
     this.expressions = def.expressions || {};
     this.blinkMorph = def.blinkMorph || null;
     this.poses = def.poses || {};
@@ -132,15 +152,6 @@ export class MMDCharacter {
   getWidth() {
     const box = new THREE.Box3().setFromObject(this.root);
     return Math.max(0.4, box.max.x - box.min.x);
-  }
-  /**
-   * 診断用: 現在のroot.scale(unitToMeter*scale)が反映された状態での、
-   * ワールド空間での実際の高さ(m)を返す。unitToMeter/scaleの計算が
-   * 意図通りかを実測値として確認するために使う(例: main.jsのデバッグ表示)。
-   */
-  getHeight() {
-    const box = new THREE.Box3().setFromObject(this.root);
-    return box.max.y - box.min.y;
   }
   setExpression(key) {
     const preset = this.expressions[key];
@@ -328,7 +339,6 @@ export class SpriteCharacter {
   }
   getFootY() { return this.root.position.y; }
   getWidth() { return this.root.scale.x; }
-  getHeight() { return this.root.scale.y; }
   setExpression() {}
   setPose() {}
   getCurrentPoseBoneNames() { return []; }

@@ -8,6 +8,14 @@
    poses: ボーンのbind-pose(初期姿勢)からの相対回転(度)で定義する
    ポーズプリセット。値は「たたき台」であり、実機/開発者モードでの
    調整を前提にしている。
+
+   targetHeightMeters(2026/07追加): そのキャラクターの設定上の実身長(m)。
+   character.jsのcomputeUnitToMeter()が、モデル読み込み時にバインド
+   ポーズの実際のバウンディングボックス高さを測定し、この値から
+   逆算してunitToMeterを動的に決定する。これにより「PMXの単位慣習が
+   1ユニット≒8cmである」という従来の未検証の仮定(unitToMeter=0.081固定)
+   に依存しなくなる。unitToMeterは後方互換のフォールバック値として
+   残してある(targetHeightMetersが取得できない異常時のみ使われる)。
    ============================================================ */
 export const CHARACTERS = [
   {
@@ -16,15 +24,8 @@ export const CHARACTERS = [
     thumb: '⭐',
     type: 'mmd',
     path: 'assets/kanata/kanata.pmx',
-    // 2026/07 修正: 従来はunitToMeter=0.081という固定値(「MMDの1ユニット≒8cm」
-    // という伝統的な慣習の想定値)を直接使っていたが、実機で「遠近感を考慮しても
-    // 明らかに小さすぎる」現象が報告された。PMX変換元がVRoid/VRM等の場合、
-    // ボーン座標が既にメートル単位に近い規約で作られていることがあり、その場合
-    // 0.081を掛けると実寸よりかなり縮む。固定値を信用せず、実際にロードした
-    // モデルの生の高さ(bind-pose)を実測し、既知の実身長(targetHeightMeters)に
-    // 一致するようスケールをcharacter.js側で都度自動算出する方式に変更した
-    // (js/character.jsのMMDCharacterコンストラクタ参照)。
-    targetHeightMeters: 1.545, // 天音かなたの想定身長(約154.5cm)
+    targetHeightMeters: 1.545,
+    unitToMeter: 0.081,
     expressions: {
       normal:    { emoji: '😐', label: '通常', weights: {} },
       smile:     { emoji: '😊', label: '笑顔', weights: { 'にこり': 1.0, '笑い': 1.0, '口角上げ': 0.6 } },
@@ -274,11 +275,11 @@ export const CHARACTERS = [
     thumb: '🎵',
     type: 'mmd',
     path: 'assets/kanade/kanade.pmx',
-    // 2026/07 修正: kanataと同じ理由で、固定unitToMeterではなく実測ベースの
-    // 自己校正方式(targetHeightMeters)へ変更した。ネイティブMMDモデルなら
-    // kanataと同じ単位慣習の可能性が高いが、それでも実測で自動補正されるため
-    // 単位慣習の違いによる誤差を吸収できる。
-    targetHeightMeters: 1.602, // 音乃瀬奏の想定身長(約160.2cm)
+    targetHeightMeters: 1.602,
+    // ネイティブMMDモデルのため、kanataと同じ単位慣習の可能性が高い。
+    // targetHeightMetersが優先されるため、この固定値は測定失敗時の
+    // フォールバックとしてのみ使われる。
+    unitToMeter: 0.081,
     expressions: {
       normal:    { emoji: '😐', label: '通常', weights: {} },
       smile:     { emoji: '😊', label: '笑顔', weights: { '笑い': 1.0, '口角上げ': 0.6 } },

@@ -7,6 +7,9 @@
      - 光源方向(lighting.jsの推定azimuth)に応じた影の位置オフセット
    を追加している。
 
+   【2026/07追加】environment-analyzer.jsによる屋内外推定と連動する
+   azimuthConfidenceパラメータを追加(下記update()のJSDoc参照)。
+
    【調査結果サマリ】
    Three.js本体のContact Shadow(平面へのソフトシャドウマップ投影)や
    PMREM/EnvironmentMapの導入も検討したが、
@@ -112,8 +115,15 @@ export function createShadowRig(scene) {
    *   未指定時は0(フェードなし)として扱う。
    * @param {{x:number,y:number,z:number}} cameraPos カメラのワールド座標。
    *   視線角度による奥行きの潰れ補正に使う。未指定時は補正なし(従来通り)。
+   * @param {number} azimuthConfidence 0〜1。光源方向ヒント(lightAzimuthDeg)への
+   *   信頼度。既定値1(従来通りの効き具合)。environment-analyzer.jsによる
+   *   屋内外推定(js/environment-analyzer.js)と組み合わせて使うことを想定しており、
+   *   屋内と判定された場合はmain.js側からこの値を大きく下げて渡す。理由:
+   *   屋内の実照明方向は太陽方位角と無関係であり、かつlighting.jsの輝度重心法
+   *   (brightest-cell)による方向推定は屋内の雑然とした照明環境でこそ外れやすい
+   *   ことがSPRINT_1_REPORT.mdで既知の限界として記録済みのため。
    */
-  function update(footY, width, placement, lightAzimuthDeg = 0, brightnessFactor = 1, distanceMeters = 0, cameraPos = null) {
+  function update(footY, width, placement, lightAzimuthDeg = 0, brightnessFactor = 1, distanceMeters = 0, cameraPos = null, azimuthConfidence = 1) {
     // 実機写真で「照明の位置にしては影の位置が変」「足が床について見えない」
     // という指摘を受けた。原因は、信頼性の低い光源方向推定(lighting.jsの
     // 輝度重心法。雑然とした室内では見当違いの方向を掴みやすいことは
@@ -125,12 +135,16 @@ export function createShadowRig(scene) {
     // 対応: 光源方向の影響は一番外側の柔らかいsoftシャドウにのみ、
     // それもごく控えめに残す。core/aoは常にplacementの真下に固定し、
     // 「そこに足が乗っている」という接地の手がかりを光源推定の精度に
-    // 依存させないようにする。
+    // 依存させないようにする。さらに2026/07、azimuthConfidenceにより
+    // 屋内判定時はこの弱い効果自体をさらに弱める(0にはしない。
+    // 屋内でも推定が偶然当たっている場合にゼロ固定するのも不自然なため、
+    // 完全ゼロではなく大きく減衰させる程度に留める)。
     const az = THREE.MathUtils.degToRad(lightAzimuthDeg);
-    const shift = width * 0.07;   // 以前の0.18から大幅に縮小
+    const confidence = THREE.MathUtils.clamp(azimuthConfidence, 0, 1);
+    const shift = width * 0.07 * confidence;   // 以前の0.18から大幅に縮小、さらに信頼度で減衰
     const offX = -Math.sin(az) * shift;
     const offZ = -Math.cos(az) * shift * 0.5;
-    const stretch = 1 + Math.min(0.25, Math.abs(lightAzimuthDeg) / 160); // 伸びも控えめに
+    const stretch = 1 + Math.min(0.25, Math.abs(lightAzimuthDeg) / 160) * confidence; // 伸びも控えめに
 
     // 実機写真で影がほぼ視認できなかった主因: このアプリのカメラは
     // だいたい水平〜浅い見下ろし角(体感15〜25度程度)でキャラを見ることが多く、
@@ -163,7 +177,7 @@ export function createShadowRig(scene) {
     // soft: 光源方向のヒントを(ごく弱く)残す唯一の層
     soft.position.set(placement.x + offX, footY + 0.002, placement.z + offZ);
     soft.scale.set(width * 1.5 * stretch, width * 1.5 * DEPTH_RATIO_SOFT, 1);
-    soft.rotation.z = -az * 0.12;
+    soft.rotation.z = -az * 0.12 * confidence;
 
     // core: 「足の真下にある締まった影」。光源方向による位置ズレ・回転は
     // 廃止し、常にplacementの真上に固定する。
