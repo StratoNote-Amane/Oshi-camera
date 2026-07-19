@@ -10,6 +10,7 @@ import { loadCharacter as loadCharacterCore } from './js/character.js';
 import { createPoseTuner } from './js/pose-ui.js';
 import { createEnvironmentAnalyzer } from './js/environment-analyzer.js';
 import { verifyProjectionConsistency } from './js/camera-projection.js';
+import { runDistanceCalibration } from './js/calibration-tool.js';
 
 let currentCharacterIndex = 0;
 
@@ -445,6 +446,21 @@ function logProjectionConsistency() {
 // コンソールから手動で再確認したい時用(実機Safariのリモートデバッグ等で使用)
 window.__verifyProjection = logProjectionConsistency;
 window.__envAnalyzerState = () => envAnalyzer.getState();
+// 距離較正テスト(calibration-tool.jsと同一ロジック)を、実際のカメラ・
+// 実際のvideoフィード込みの本番環境(main.js)で直接実行できるようにする。
+// dev.htmlのOrbitControlsカメラとは異なり、main.jsのカメラは静止時
+// 原点付近からワールド-Z方向を向いているため、この環境での結果こそが
+// 「AR精度検証項目①③」に対する最も意味のある(実機に最も近い)判定材料になる。
+// 使い方: Safari Web Inspector等のコンソールで __runCalibration() を実行。
+window.__runCalibration = (realHeightMeters = 1.55) => {
+  if (!activeCharacter) { console.warn('[calibration] キャラクターが読み込まれていません'); return null; }
+  const result = runDistanceCalibration({
+    camera, renderer, character: activeCharacter, placement, applyPlacement,
+    realHeightMeters,
+  });
+  console.log('[calibration] main.js(実カメラ)での検証結果:\n' + result.lines.join('\n'));
+  return result;
+};
 function sizeStageToVideo(vw, vh) {
   const aspect = vw / vh;
   const wrapRect = stageWrap.getBoundingClientRect();
