@@ -8,6 +8,7 @@ import { applyAtmosphericPerspective } from './js/atmosphere.js';
 import { CHARACTERS } from './js/characters-data.js';
 import { loadCharacter as loadCharacterCore } from './js/character.js';
 import { initDiagnostics } from './js/diagnostics.js';
+import { createIdleMotionManager } from './js/idle-motion.js';
 
 let currentCharacterIndex = 0;
 
@@ -201,7 +202,6 @@ function buildPoseRing(def) {
       if (!activeCharacter) return;
       if (categoryKey === 'pose') {
         activeCharacter.setPose(itemKey);
-        if (posePanel.classList.contains('show')) poseTuner.refresh();
         // 「座る」等centerOffsetを使うポーズは足元のワールドYが変わるため、
         // ポーズ切り替え時にも接地影の位置を再計算する。
         applyPlacement();
@@ -901,6 +901,21 @@ shareBtn.addEventListener('click', async () => {
     ? 'この環境では共有シートが使えません。動画を長押しして保存してください'
     : 'この環境では共有シートが使えません。画像を長押しして「写真に保存」してください';
 });
+
+/* ============================================================
+   待機モーション(20260721ポージング指示書 + 補足指示)
+   ------------------------------------------------------------
+   ユーザー操作が30秒以上ない場合、既存のwaveポーズ+wink表情、
+   または上半身の左右揺れ(setGlobalOffset('bodyYaw'))のいずれかを
+   自動再生する。撮影中(isCapturing)・録画中(isRecording)・
+   カウントダウン中は発動させない。
+   ============================================================ */
+const idleMotion = createIdleMotionManager({
+  getCharacter: () => activeCharacter,
+  isBusy: () => isCapturing || isRecording,
+});
+idleMotion.attachAutoListeners(stage);
+idleMotion.attachAutoListeners(document.getElementById('ui-layer'));
 
 /* ============================================================
    レンダーループ
