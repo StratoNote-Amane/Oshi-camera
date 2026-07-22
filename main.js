@@ -7,7 +7,6 @@ import { applyPhotoFinish } from './js/postfx.js';
 import { applyAtmosphericPerspective } from './js/atmosphere.js';
 import { CHARACTERS } from './js/characters-data.js';
 import { loadCharacter as loadCharacterCore } from './js/character.js';
-import { createPoseTuner } from './js/pose-ui.js';
 import { initDiagnostics } from './js/diagnostics.js';
 
 let currentCharacterIndex = 0;
@@ -25,7 +24,6 @@ const stage         = document.getElementById('stage');
 const video         = document.getElementById('camera-video');
 const canvas        = document.getElementById('three-canvas');
 const resetBtn      = document.getElementById('reset-btn');
-const tuneBtn       = document.getElementById('tune-btn');
 const shutterBtn    = document.getElementById('shutter-btn');
 const resultScreen  = document.getElementById('result-screen');
 const resultImg     = document.getElementById('result-img');
@@ -34,20 +32,6 @@ const shareBtn      = document.getElementById('share-btn');
 const retakeBtn     = document.getElementById('retake-btn');
 const loadingOverlay = document.getElementById('loading-overlay');
 const loadingText   = document.getElementById('loading-text');
-const posePanel     = document.getElementById('pose-panel');
-const posePanelClose = document.getElementById('pose-panel-close');
-const tuneBoneSelect = document.getElementById('tune-bone-select');
-const tuneX = document.getElementById('tune-x');
-const tuneY = document.getElementById('tune-y');
-const tuneZ = document.getElementById('tune-z');
-const tuneXVal = document.getElementById('tune-x-val');
-const tuneYVal = document.getElementById('tune-y-val');
-const tuneZVal = document.getElementById('tune-z-val');
-const tuneResetBtn = document.getElementById('tune-reset-btn');
-const tuneCopyBtn = document.getElementById('tune-copy-btn');
-const posePanelHint = document.getElementById('pose-panel-hint');
-const gridBtn = document.getElementById('grid-btn');
-const gridOverlay = document.getElementById('grid-overlay');
 const timerBtn = document.getElementById('timer-btn');
 const countdownOverlay = document.getElementById('countdown-overlay');
 const countdownNum = document.getElementById('countdown-num');
@@ -229,25 +213,6 @@ function buildPoseRing(def) {
     }
   );
 }
-
-const poseTuner = createPoseTuner({
-  select: tuneBoneSelect,
-  xSlider: tuneX, ySlider: tuneY, zSlider: tuneZ,
-  xVal: tuneXVal, yVal: tuneYVal, zVal: tuneZVal,
-  hint: posePanelHint,
-}, () => activeCharacter);
-
-tuneBtn.addEventListener('click', () => {
-  posePanel.classList.toggle('show');
-  tuneBtn.classList.toggle('active');
-  if (posePanel.classList.contains('show')) poseTuner.refresh();
-});
-posePanelClose.addEventListener('click', () => {
-  posePanel.classList.remove('show');
-  tuneBtn.classList.remove('active');
-});
-tuneResetBtn.addEventListener('click', () => poseTuner.resetToDefault());
-tuneCopyBtn.addEventListener('click', () => poseTuner.copyJSON());
 
 /* ============================================================
    配置の反映
@@ -660,11 +625,6 @@ resetBtn.addEventListener('click', () => {
 /* ============================================================
    構図グリッド／セルフタイマー
    ============================================================ */
-gridBtn.addEventListener('click', () => {
-  gridOverlay.classList.toggle('show');
-  gridBtn.classList.toggle('active');
-});
-
 const shadowDebugBtn = document.getElementById('shadow-debug-btn');
 let shadowDebugOn = false;
 shadowDebugBtn.addEventListener('click', () => {

@@ -35,10 +35,6 @@
 <!-- 撮影ステージ：video と three.js canvas を同じ矩形に重ねる -->
 <div id="stage-wrap">
   <div id="stage">
-    <video id="camera-video" autoplay playsinline muted></video>
-    <canvas id="three-canvas"></canvas>
-    <div id="grid-overlay"></div>
-  </div>
 </div>
 <div id="flash-overlay"></div>
 <div id="countdown-overlay"><span id="countdown-num"></span></div>
@@ -48,13 +44,11 @@
   <div id="top-controls">
     <div id="top-bar">
       <div class="top-bar-left">
-        <button id="grid-btn" class="icon-btn" title="構図グリッド">▦</button>
         <button id="shadow-debug-btn" class="icon-btn" title="影デバッグ表示">🔦</button>
         <button id="timer-btn" class="icon-btn" title="セルフタイマー">⏱</button>
       </div>
       <div class="top-bar-right">
         <button id="mode-btn" class="mode-chip" title="写真/動画 切替">📷 写真</button>
-        <button id="tune-btn" class="icon-btn" title="ポーズ調整モード">🛠</button>
         <button id="reset-btn" class="icon-btn" title="位置と向きの基準をリセット">⟲</button>
       </div>
     </div>
@@ -99,38 +93,6 @@
 <div id="loading-overlay">
   <div class="loading-spinner"></div>
   <div id="loading-text">推しを読み込み中…</div>
-</div>
-
-<!-- ポーズ調整パネル：実機でボーンの角度をその場で追い込むための開発者向けツール -->
-<div id="pose-panel">
-  <div class="pose-panel-head">
-    <span>ポーズ調整モード</span>
-    <button id="pose-panel-close" class="icon-btn small">✕</button>
-  </div>
-  <div class="pose-panel-row">
-    <label>ボーン</label>
-    <select id="tune-bone-select"></select>
-  </div>
-  <div class="pose-panel-row slider-row">
-    <label>X</label>
-    <input type="range" id="tune-x" min="-180" max="180" step="1" value="0">
-    <span id="tune-x-val">0</span>
-  </div>
-  <div class="pose-panel-row slider-row">
-    <label>Y</label>
-    <input type="range" id="tune-y" min="-180" max="180" step="1" value="0">
-    <span id="tune-y-val">0</span>
-  </div>
-  <div class="pose-panel-row slider-row">
-    <label>Z</label>
-    <input type="range" id="tune-z" min="-180" max="180" step="1" value="0">
-    <span id="tune-z-val">0</span>
-  </div>
-  <div class="pose-panel-actions">
-    <button id="tune-reset-btn">このポーズを初期値に戻す</button>
-    <button id="tune-copy-btn">JSONをコピー</button>
-  </div>
-  <p class="pose-panel-hint" id="pose-panel-hint"></p>
 </div>
 
 <script type="importmap">
