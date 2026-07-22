@@ -947,13 +947,28 @@ animate();
    起動フロー
    ============================================================ */
 function initCharacterSelect() {
+  // キャラクター画面が表示されない場合のデバッグ用ログ
+  console.log('[OshiCamera] initCharacterSelect called. CHARACTERS.length =', CHARACTERS.length);
+  console.log('[OshiCamera] selectScreen =', selectScreen, 'characterList =', characterList);
+  
+  if (!selectScreen || !characterList) {
+    console.error('[OshiCamera] ERROR: selectScreen or characterList not found in DOM');
+    return;
+  }
+  
+  // キャラクターが0体の場合は選択画面を非表示
   if (CHARACTERS.length === 0) {
     selectScreen.style.display = 'none';
     currentCharacterIndex = 0;
+    console.log('[OshiCamera] No characters, hiding select-screen');
     return;
   }
+  
+  // 1体以上のキャラクターがいる場合は選択画面を表示
   selectScreen.style.display = 'flex';
   characterList.innerHTML = '';
+  console.log('[OshiCamera] Displaying select-screen with', CHARACTERS.length, 'character(s)');
+  
   CHARACTERS.forEach((def, i) => {
     const card = document.createElement('div');
     card.className = 'character-card';
@@ -961,11 +976,19 @@ function initCharacterSelect() {
     card.addEventListener('click', () => {
       currentCharacterIndex = i;
       selectScreen.style.display = 'none';
+      console.log('[OshiCamera] Selected character:', def.name);
     });
     characterList.appendChild(card);
   });
 }
-initCharacterSelect();
+
+// DOMContentLoaded後に初期化を実行する（モジュール読み込み時点ではまだDOM準備中の可能性があるため）
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initCharacterSelect);
+} else {
+  // すでにDOMContentLoadedイベント後の場合は即座に実行
+  initCharacterSelect();
+}
 
 startBtn.addEventListener('click', async () => {
   startError.textContent = '';
