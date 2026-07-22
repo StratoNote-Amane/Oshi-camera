@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { MMDLoader } from 'three/addons/loaders/MMDLoader.js';
 import { OutlineEffect } from 'three/addons/effects/OutlineEffect.js';
 import { createEnvironmentLighting } from './js/lighting.js';
-import { createShadowRig } from './js/shadow-rig.js';
+import { createShadowRig } from './js/shadow/shadow-rig.js';
 import { applyPhotoFinish } from './js/postfx.js';
 import { applyAtmosphericPerspective } from './js/atmosphere.js';
 import { CHARACTERS } from './js/characters-data.js';
