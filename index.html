@@ -35,9 +35,12 @@
 <!-- 撮影ステージ：video と three.js canvas を同じ矩形に重ねる -->
 <div id="stage-wrap">
   <div id="stage">
+    <video id="camera-video" playsinline muted autoplay></video>
+    <canvas id="three-canvas"></canvas>
+  </div>
+  <div id="flash-overlay"></div>
+  <div id="countdown-overlay"><span id="countdown-num"></span></div>
 </div>
-<div id="flash-overlay"></div>
-<div id="countdown-overlay"><span id="countdown-num"></span></div>
 
 <!-- 操作UI -->
 <div id="ui-layer">
