@@ -48,6 +48,9 @@ export function loadCharacter(def, { MMDLoader, scene }, callbacks = {}) {
       (mesh) => {
         scene.add(mesh);
         softenMaterials(mesh);
+        // ShadowRig(Directional Shadow)の光源から影を落とせるようにする。
+        // renderer.shadowMap.enabledがfalseの環境(dev.js等)では無害。
+        mesh.traverse((obj) => { if (obj.isMesh) obj.castShadow = true; });
         const character = new MMDCharacter(mesh, def);
         if (callbacks.onLoad) callbacks.onLoad(character);
       },
