@@ -139,8 +139,10 @@ const environmentLighting = createEnvironmentLighting({
   baseToneExposure: BASE_TONE_EXPOSURE,
 });
 
-// 足元の影(二重影+接触AO)は js/shadow-rig.js に委譲(Sprint 1 Task 2)。
-const shadowRig = createShadowRig(scene);
+// 足元の影(Contact Shadow)とThree.js標準ShadowMapによる太陽光の影
+// (Directional Shadow)は js/shadow/ 以下のShadowRigに委譲。
+// rendererを渡すとshadowMap.enabled/typeを自動設定する。
+const shadowRig = createShadowRig(scene, { renderer, quality: 'medium' });
 
 /* ============================================================
    診断機能(環境解析/投影整合性チェック/距離較正/画面内デバッグ)
@@ -272,6 +274,12 @@ function applyPlacement() {
   // 既知の制約として残す)。lighting.js/postfx.jsへの統合は、確認しながら
   // 段階的に進める方針。
   const azimuthConfidence = diagnostics.getAzimuthConfidence();
+  // ShadowRig(Directional/Environment Shadow)の主入力。診断モジュールが
+  // EnvironmentState全体を返せない場合はnullにフォールバックし、
+  // azimuthConfidenceのみでの後方互換動作になる(shadow-rig.js参照)。
+  const environmentState = typeof diagnostics.getEnvironmentState === 'function'
+    ? diagnostics.getEnvironmentState()
+    : null;
 
   shadowRig.update(
     footY, width, placement,
@@ -279,7 +287,8 @@ function applyPlacement() {
     environmentLighting.getBrightnessFactor(),
     distanceFromCam,
     camera.position,
-    azimuthConfidence
+    azimuthConfidence,
+    environmentState
   );
   applyAtmosphericPerspective(activeCharacter.root, distanceFromCam);
 }
@@ -654,6 +663,19 @@ resetBtn.addEventListener('click', () => {
 gridBtn.addEventListener('click', () => {
   gridOverlay.classList.toggle('show');
   gridBtn.classList.toggle('active');
+});
+
+const shadowDebugBtn = document.getElementById('shadow-debug-btn');
+let shadowDebugOn = false;
+shadowDebugBtn.addEventListener('click', () => {
+  shadowDebugOn = !shadowDebugOn;
+  shadowRig.setDebugEnabled(shadowDebugOn);
+  shadowDebugBtn.classList.toggle('active', shadowDebugOn);
+  if (shadowDebugOn) {
+    // CameraHelperの可視化に加え、判定理由をコンソールへ定期出力する
+    // (画面上への常時HUD表示はdev.js対応時にまとめて実装する方針)
+    console.log('[shadow-debug]', shadowRig.getDebugInfo());
+  }
 });
 
 const TIMER_OPTIONS = [0, 3, 10];
