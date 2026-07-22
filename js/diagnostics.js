@@ -68,5 +68,12 @@ export function initDiagnostics({ video, stage, camera, renderer, getCharacter, 
     return s.environmentType === 'indoor' ? 0.15 : Math.max(0.4, Math.min(1, s.outdoorScore / 100));
   }
 
-  return { start, logProjectionConsistency, runCalibration, getAzimuthConfidence };
+  // ShadowRig(js/shadow/shadow-rig.js)がDirectional/Environment Shadowの
+  // 主入力として使うEnvironmentState全体。getAzimuthConfidence()は
+  // 後方互換のフォールバック用にそのまま残す(ADR-014)。
+  function getEnvironmentState() {
+    return envAnalyzer.getState();
+  }
+
+  return { start, logProjectionConsistency, runCalibration, getAzimuthConfidence, getEnvironmentState };
 }
