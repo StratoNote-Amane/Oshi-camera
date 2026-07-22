@@ -947,7 +947,7 @@ animate();
    起動フロー
    ============================================================ */
 function initCharacterSelect() {
-  if (CHARACTERS.length <= 1) {
+  if (CHARACTERS.length === 0) {
     selectScreen.style.display = 'none';
     currentCharacterIndex = 0;
     return;
