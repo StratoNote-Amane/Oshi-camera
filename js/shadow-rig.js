@@ -1,195 +1,189 @@
 /* ============================================================
-   shadow-rig.js — 接地影モジュール
+   shadow-rig.js — 影システムの統合窓口(唯一のエクスポート面)
    ------------------------------------------------------------
-   Sprint 1 Task 2「Shadow Quality向上」への対応。
-   既存の二重影(柔らかい広い影+締まった影)に加え、
-     - 接触AO(靴裏直下のごく小さく濃い影)
-     - 光源方向(lighting.jsの推定azimuth)に応じた影の位置オフセット
-   を追加している。
+   このファイルはロジックをほとんど持たない「配線」だけの層に
+   意図的に留めている。実際の計算は
+     - contact-shadow.js    (常時の接地AO)
+     - directional-shadow.js(ShadowMapによる太陽光の影)
+     - environment-shadow.js(環境による強さ/色の補正計算)
+     - shadow-receiver.js   (影を受ける床、将来は壁/ベンチ等)
+   にそれぞれ分離済みで、shadow-rig.jsは「EnvironmentStateを
+   environment-shadow.jsに渡して補正値を得る→各モジュールへ
+   その補正値と共に配置情報を渡す」という一方向の流れを
+   実行するだけ。lighting.js/atmosphere.js/postfx.js/main.jsとは
+   直接依存し合わない設計を保ち、循環参照を防ぐ
+   (このファイルが依存するのはThree.jsと同じshadow/ディレクトリ内の
+   兄弟モジュールのみ)。
 
-   【2026/07追加】environment-analyzer.jsによる屋内外推定と連動する
-   azimuthConfidenceパラメータを追加(下記update()のJSDoc参照)。
-
-   【調査結果サマリ】
-   Three.js本体のContact Shadow(平面へのソフトシャドウマップ投影)や
-   PMREM/EnvironmentMapの導入も検討したが、
-     - リアルタイムシャドウマップは今回のような単純な「板1枚に疑似影」
-       構成に対してオーバースペックで、モバイルでの負荷増が見合わない
-     - 本アプリは背景が実写(video)であり、Three.js側のシャドウマップを
-       背景に落とすことはそもそもできない(影を落とす床がCGではないため)
-   という理由から、引き続き「テクスチャ疑似影+位置/伸縮による方向表現」の
-   延長線上で改善する方針とした。
+   旧 js/shadow-rig.js(Blob Shadowのみで構成)からの置き換えとして、
+   呼び出し側(main.js)との互換性をできる限り保つため、
+   createShadowRig(scene)の戻り値が持つ`update(...)`の引数の並びは
+   旧実装と同じ順序を維持し、末尾にenvironmentStateを追加している
+   (旧引数を渡すだけの呼び出しでも動く後方互換の設計)。
    ============================================================ */
 import * as THREE from 'three';
-import { computeHazeFactor } from './atmosphere.js';
+import { computeHazeFactor } from '../atmosphere.js';
+import { createContactShadow } from './contact-shadow.js';
+import { createDirectionalShadow } from './directional-shadow.js';
+import { createFloorReceiver, ShadowReceiverRegistry } from './shadow-receiver.js';
+import { computeEnvironmentShadowParams } from './environment-shadow.js';
+import { resolveQuality, DEFAULT_SHADOW_QUALITY } from './shadow-quality.js';
 
-/* ------------------------------------------------------------
-   視線角度による「奥行きの潰れ」補正
-   --------------------------------------------------------------
-   接地影は水平に寝かせた板ポリ(rotation.x = -PI/2)。カメラの高さが
-   一定のまま被写体が遠くなるほど、カメラ→足元への視線は水平に近づき、
-   板を真横から覗き込む形になって奥行き方向がほぼ消える(=浮いて見える)。
-   これはテクスチャ解像度やopacityの問題ではなく、平面ポリゴンを浅い角度
-   から見た時の純粋な透視上の潰れなので、既存のDEPTH_RATIO定数(固定値)
-   だけでは「近距離でちょうどよい値」を「遠距離ではさらに潰れて見える」
-   ことになり、距離が伸びるほど悪化する方向に効いてしまっていた。
-
-   ここでは、カメラ→足元の視線が水平から何度上がっているか(elevation)を
-   求め、その正弦(sin)を「潰れの目安」として使う。sin=1(真上から見る)なら
-   潰れなし、sin=0(真横から見る)なら完全に潰れる、という単純な近似。
-   基準角度(REFERENCE_ELEVATION_DEG、既存のDEPTH_RATIO定数を決めた時に
-   想定していた「体感15〜25度」の中央値)を1倍として相対値に変換し、
-   MIN/MAX_FORESHORTENでクランプする。下限を設けることで、ジャイロの
-   姿勢誤差や極端に浅い角度でも接地影が完全には消えないことを保証する。
-   ============================================================ */
+// 視線角度による奥行きの潰れ補正(旧shadow-rig.jsから継承)。
+// Contact Shadowは板ポリのまま残しているため、この現象は依然として
+// 起こり得る。Directional Shadow側はThree.js標準のシャドウマップ
+//投影に任せるため、この補正の対象外(実際の3D投影が自動で処理する)。
 const REFERENCE_ELEVATION_DEG = 20;
-const MIN_FORESHORTEN = 0.55; // これ未満には潰さない(浮いて見える現象への下限)
-const MAX_FORESHORTEN = 1.35; // 真上から見下ろす場合でも伸ばしすぎない上限
-
+const MIN_FORESHORTEN = 0.55;
+const MAX_FORESHORTEN = 1.35;
 function computeForeshortenFactor(cameraPos, footPoint) {
   if (!cameraPos) return 1;
   const dx = footPoint.x - cameraPos.x;
   const dz = footPoint.z - cameraPos.z;
   const horizDist = Math.hypot(dx, dz) || 1e-4;
-  const verticalDrop = cameraPos.y - footPoint.y; // 正: カメラの方が高い(見下ろし)
+  const verticalDrop = cameraPos.y - footPoint.y;
   const elevationRad = Math.atan2(Math.abs(verticalDrop), horizDist);
   const viewSin = Math.max(Math.sin(elevationRad), 0.001);
   const refSin = Math.sin(THREE.MathUtils.degToRad(REFERENCE_ELEVATION_DEG));
   return THREE.MathUtils.clamp(viewSin / refSin, MIN_FORESHORTEN, MAX_FORESHORTEN);
 }
 
-function makeShadowTexture({ core, mid }) {
-  // 遠距離で「黒い一枚の板」に潰れて見える現象への対応。
-  // 主因は、影の板が画面上でごく小さく(数px)なった際、グラデーションの
-  // ミップマップ生成/縮小フィルタが甘いと、なだらかなフェードが
-  // べったりした矩形として縮小されてしまうこと。
-  //   1. 解像度を256→320へ、グラデーションの中間ストップも0.55→0.62へ
-  //      広げ、そもそも急激な濃淡変化を減らす(縮小時に潰れにくくする)
-  //   2. CanvasTextureのフィルタ/ミップマップ設定を明示し、縮小時に
-  //      three.jsの既定任せにしない
-  const size = 320;
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const ctx = c.getContext('2d');
-  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  g.addColorStop(0, `rgba(0,0,0,${core})`);
-  g.addColorStop(0.62, `rgba(0,0,0,${mid})`);
-  g.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(c);
-  tex.generateMipmaps = true;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.needsUpdate = true;
-  return tex;
-}
+/**
+ * @param {THREE.Scene} scene
+ * @param {object} [options]
+ * @param {string} [options.quality] 'low'|'medium'|'high'|'ultra'
+ * @param {THREE.WebGLRenderer} [options.renderer] 渡すとrenderer.shadowMapを
+ *   自動設定する(main.js側で既にshadowMap.enabledを立てている場合は省略可)。
+ */
+export function createShadowRig(scene, options = {}) {
+  let qualityName = options.quality || DEFAULT_SHADOW_QUALITY;
+  let quality = resolveQuality(qualityName);
 
-export function createShadowRig(scene) {
-  function makePlane(tex) {
-    const mesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false })
-    );
-    mesh.rotation.x = -Math.PI / 2;
-    scene.add(mesh);
-    return mesh;
+  if (options.renderer) {
+    options.renderer.shadowMap.enabled = true;
+    options.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   }
 
-  // 実機写真で「影がほぼ見えない」と確認されたため、既定の濃さを底上げする。
-  // (主因はscale側の奥行き比率だが、こちらも合わせて強める)
-  const soft = makePlane(makeShadowTexture({ core: 0.42, mid: 0.24 }));
-  const core = makePlane(makeShadowTexture({ core: 0.62, mid: 0.30 }));
-  const ao = makePlane(makeShadowTexture({ core: 0.85, mid: 0.45 }));
+  const contact = createContactShadow(scene);
+  const directional = createDirectionalShadow(scene, quality);
+  const receivers = new ShadowReceiverRegistry();
+  const floor = receivers.register(createFloorReceiver(scene, 48));
+
+  let debugEnabled = false;
+  let shadowCameraHelper = null;
+  let lastDebugInfo = {};
 
   /**
-   * @param {number} footY  足元のワールドY座標
-   * @param {number} width  シルエットの目安幅
-   * @param {{x:number,z:number}} placement キャラクターのXZ位置
-   * @param {number} lightAzimuthDeg 推定した光源の水平方向(度、lighting.jsから取得)
-   * @param {number} brightnessFactor 環境光推定の明るさ係数(lighting.jsのfactorと
-   *   同じ0.4〜2.2程度のスケール)。明るい環境ほど影のコントラストを僅かに強める。
-   *   未指定時は1.0(補正なし)として扱う。
-   * @param {number} distanceMeters カメラからの距離(m目安、atmosphere.jsと同じ
-   *   基準)。遠いほど影のコントラスト・不透明度を弱める(距離フェード)。
-   *   未指定時は0(フェードなし)として扱う。
-   * @param {{x:number,y:number,z:number}} cameraPos カメラのワールド座標。
-   *   視線角度による奥行きの潰れ補正に使う。未指定時は補正なし(従来通り)。
-   * @param {number} azimuthConfidence 0〜1。光源方向ヒント(lightAzimuthDeg)への
-   *   信頼度。既定値1(従来通りの効き具合)。environment-analyzer.jsによる
-   *   屋内外推定(js/environment-analyzer.js)と組み合わせて使うことを想定しており、
-   *   屋内と判定された場合はmain.js側からこの値を大きく下げて渡す。理由:
-   *   屋内の実照明方向は太陽方位角と無関係であり、かつlighting.jsの輝度重心法
-   *   (brightest-cell)による方向推定は屋内の雑然とした照明環境でこそ外れやすい
-   *   ことがSPRINT_1_REPORT.mdで既知の限界として記録済みのため。
+   * @param {number} footY
+   * @param {number} width
+   * @param {{x:number,z:number}} placement
+   * @param {number} lightAzimuthDeg lighting.jsのgetEstimatedAzimuthDeg()
+   * @param {number} brightnessFactor lighting.jsのgetBrightnessFactor()
+   * @param {number} distanceMeters
+   * @param {{x:number,y:number,z:number}} cameraPos
+   * @param {number} [azimuthConfidence=1] 旧shadow-rig.js互換(現状は
+   *   environmentStateがあればそちらのenvironmentTypeを優先するが、
+   *   environmentState未提供時のフォールバックとして使う)
+   * @param {object|null} [environmentState] environment-analyzer.jsの
+   *   getState()の戻り値。Directional/Environment Shadowの主入力。
    */
-  function update(footY, width, placement, lightAzimuthDeg = 0, brightnessFactor = 1, distanceMeters = 0, cameraPos = null, azimuthConfidence = 1) {
-    // 実機写真で「照明の位置にしては影の位置が変」「足が床について見えない」
-    // という指摘を受けた。原因は、信頼性の低い光源方向推定(lighting.jsの
-    // 輝度重心法。雑然とした室内では見当違いの方向を掴みやすいことは
-    // SPRINT_1_REPORT.mdでも既知の限界として記載済み)を、足元直下にある
-    // べきcore/aoの位置・回転にまでそのまま適用していたこと。
-    // 推定が外れた時にcoreまでズレると、「足の真下に来るべき濃い接地点」が
-    // 動いてしまい、見た目の破綻が大きい。
-    //
-    // 対応: 光源方向の影響は一番外側の柔らかいsoftシャドウにのみ、
-    // それもごく控えめに残す。core/aoは常にplacementの真下に固定し、
-    // 「そこに足が乗っている」という接地の手がかりを光源推定の精度に
-    // 依存させないようにする。さらに2026/07、azimuthConfidenceにより
-    // 屋内判定時はこの弱い効果自体をさらに弱める(0にはしない。
-    // 屋内でも推定が偶然当たっている場合にゼロ固定するのも不自然なため、
-    // 完全ゼロではなく大きく減衰させる程度に留める)。
-    const az = THREE.MathUtils.degToRad(lightAzimuthDeg);
-    const confidence = THREE.MathUtils.clamp(azimuthConfidence, 0, 1);
-    const shift = width * 0.07 * confidence;   // 以前の0.18から大幅に縮小、さらに信頼度で減衰
-    const offX = -Math.sin(az) * shift;
-    const offZ = -Math.cos(az) * shift * 0.5;
-    const stretch = 1 + Math.min(0.25, Math.abs(lightAzimuthDeg) / 160) * confidence; // 伸びも控えめに
+  function update(
+    footY, width, placement, lightAzimuthDeg = 0, brightnessFactor = 1,
+    distanceMeters = 0, cameraPos = null, azimuthConfidence = 1, environmentState = null
+  ) {
+    const envParams = computeEnvironmentShadowParams(environmentState);
+    // environmentStateが無い場合は、旧APIのazimuthConfidenceをそのまま
+    // Directional Shadowの強さとして流用する(後方互換フォールバック)。
+    const directionalStrength = environmentState
+      ? envParams.directionalStrength
+      : THREE.MathUtils.clamp(azimuthConfidence, 0, 1);
 
-    // 実機写真で影がほぼ視認できなかった主因: このアプリのカメラは
-    // だいたい水平〜浅い見下ろし角(体感15〜25度程度)でキャラを見ることが多く、
-    // 板を寝かせた影は奥行き方向(このplaneのローカルY、ワールドでは水平面内の
-    // 前後方向)が強く潰れているとその浅い視点からの透視でさらに潰れ、
-    // ほぼ線のようになって消えてしまう。奥行き比率を0.5〜0.6前後から
-    // 0.85前後まで引き上げ、浅い角度で見ても面として視認できるようにする。
-    // 視線角度による潰れ補正(下限つき)。cameraPos未指定時は1(補正なし)。
     const foreshorten = computeForeshortenFactor(cameraPos, { x: placement.x, y: footY, z: placement.z });
-    const DEPTH_RATIO_SOFT = THREE.MathUtils.clamp(0.85 * foreshorten, 0.45, 1.0);
-    const DEPTH_RATIO_CORE = THREE.MathUtils.clamp(0.8 * foreshorten, 0.45, 1.0);
-    const DEPTH_RATIO_AO = THREE.MathUtils.clamp(0.7 * foreshorten, 0.4, 1.0);
+    const distanceFade = 1 - computeHazeFactor(distanceMeters) * 0.5;
 
-    // 明るい環境(晴天・逆光等)ほど実際のコントラストは強く出るはずなので、
-    // 影の不透明度をbrightnessFactorに緩やかに連動させる。
-    // opacityは1を超えても見た目上の効果がないため、暗い環境でのみ
-    // わずかに弱める方向にとどめる(常時フル濃度を基本とする)。
-    const brightBoost = THREE.MathUtils.clamp(0.78 + brightnessFactor * 0.22, 0.78, 1.0);
+    contact.update(footY, width, placement, distanceMeters, envParams.contactContrast * distanceFade * Math.min(1.1, foreshorten + 0.3));
 
-    // 距離フェード: 「一定距離を超えると影が黒い一枚の板になって浮く」現象への対応。
-    // 板一枚に疑似影を貼る手法は、画面上のサイズが数pxまで縮む極端な遠距離では
-    // グラデーションが潰れて硬い矩形に見えやすく、また浅い視点角も相まって
-    // 足元から浮いて見えやすい。atmosphere.jsと同じ距離しきい値(NEAR_M〜FAR_M)を
-    // 使い、遠いほど影自体を薄くフェードさせることで、硬い黒板として
-    // 目立つ前に見た目上消えていくようにする(現実でも遠くの影は薄くぼやける)。
-    const distanceFade = 1 - computeHazeFactor(distanceMeters) * 0.7;
-    const finalOpacity = brightBoost * distanceFade;
-    [soft, core, ao].forEach((mesh) => { mesh.material.opacity = finalOpacity; });
+    const sunAltitude = environmentState ? environmentState.sunAltitude : null;
+    directional.update(footY, placement, width, sunAltitude, lightAzimuthDeg, directionalStrength, quality);
 
-    // soft: 光源方向のヒントを(ごく弱く)残す唯一の層
-    soft.position.set(placement.x + offX, footY + 0.002, placement.z + offZ);
-    soft.scale.set(width * 1.5 * stretch, width * 1.5 * DEPTH_RATIO_SOFT, 1);
-    soft.rotation.z = -az * 0.12 * confidence;
+    // 床(Shadow Receiver)を常にキャラクターの足元へ追従させる。
+    // サイズは固定(directional-shadow.jsのフラスタム上限より十分大きい48m)。
+    floor.mesh.position.set(placement.x, footY, placement.z);
+    floor.setOpacity(0.55 * directionalStrength);
 
-    // core: 「足の真下にある締まった影」。光源方向による位置ズレ・回転は
-    // 廃止し、常にplacementの真上に固定する。
-    core.position.set(placement.x, footY + 0.003, placement.z);
-    core.scale.set(width * 0.68, width * 0.68 * DEPTH_RATIO_CORE, 1);
-    core.rotation.z = 0;
-
-    // ao: 「靴底が触れている点」そのもの。もっとも重要な接地の手がかりなので
-    // 位置は絶対にズラさず、輪郭をさらに締めて濃さを保つ。
-    ao.position.set(placement.x, footY + 0.004, placement.z);
-    ao.scale.set(width * 0.26, width * 0.26 * DEPTH_RATIO_AO, 1);
+    if (debugEnabled) {
+      lastDebugInfo = {
+        environmentType: environmentState ? environmentState.environmentType : 'unknown(no EnvironmentState)',
+        directionalStrength: directionalStrength.toFixed(2),
+        sunAltitude: sunAltitude == null ? 'n/a' : `${sunAltitude.toFixed(1)}°`,
+        lightAzimuthDeg: `${lightAzimuthDeg.toFixed(1)}°`,
+        quality: quality.label,
+        reason: envParams.reason,
+      };
+      if (shadowCameraHelper) shadowCameraHelper.update();
+    }
   }
 
-  return { soft, core, ao, update };
+  function setQuality(name) {
+    quality = resolveQuality(name);
+    qualityName = name;
+    directional.setQuality(quality);
+  }
+  function getQuality() {
+    return qualityName;
+  }
+
+  /**
+   * Shadow Debug Modeの切り替え。GUIから呼ぶ想定(index.htmlに
+   * デバッグボタンを追加し、main.js側でこの関数を紐付ける)。
+   */
+  function setDebugEnabled(v) {
+    debugEnabled = v;
+    if (v && !shadowCameraHelper) {
+      shadowCameraHelper = new THREE.CameraHelper(directional.light.shadow.camera);
+      scene.add(shadowCameraHelper);
+    }
+    if (shadowCameraHelper) shadowCameraHelper.visible = v;
+  }
+  function getDebugInfo() {
+    return lastDebugInfo;
+  }
+
+  /**
+   * 将来の壁・ベンチ・テーブル・階段等への拡張用。呼び出し側が
+   * 用意したメッシュにreceiveShadow=trueを立てて登録するだけの薄い
+   * ラッパー(GroundEstimator等への依存は一切持たない)。
+   */
+  function registerReceiver(mesh, kind = 'custom') {
+    mesh.receiveShadow = true;
+    return receivers.register({
+      mesh,
+      kind,
+      setOpacity: (v) => { if (mesh.material && 'opacity' in mesh.material) mesh.material.opacity = v; },
+      dispose: (s) => { s.remove(mesh); },
+    });
+  }
+
+  function dispose() {
+    contact.dispose();
+    directional.dispose();
+    receivers.getAll().forEach((r) => r.dispose && r.dispose(scene));
+    if (shadowCameraHelper) scene.remove(shadowCameraHelper);
+  }
+
+  return {
+    update,
+    setQuality,
+    getQuality,
+    setDebugEnabled,
+    getDebugInfo,
+    registerReceiver,
+    receivers,
+    dispose,
+    // 互換用: 旧shadow-rig.jsはsoft/core/aoのMeshを直接公開していた。
+    // 現行はcontact.core/contact.aoが相当するため、参照が残っている
+    // 呼び出し元がある場合に備えて薄いエイリアスを残す。
+    core: contact.core,
+    ao: contact.ao,
+  };
 }
