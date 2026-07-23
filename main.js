@@ -9,6 +9,10 @@ import { CHARACTERS } from './js/characters-data.js';
 import { loadCharacter as loadCharacterCore } from './js/character.js';
 import { initDiagnostics } from './js/diagnostics.js';
 import { createIdleMotionManager } from './js/idle-motion.js';
+import { GroundEstimator } from './js/environment/ground-estimator.js';
+import { PlacementReticle } from './js/placement-reticle.js';
+import { computePerceptualScaleFactor } from './js/perceptual-scale.js';
+import { createCompassCalibration } from './js/compass-calibration.js';
 
 let currentCharacterIndex = 0;
 
@@ -24,6 +28,8 @@ const stageWrap     = document.getElementById('stage-wrap');
 const stage         = document.getElementById('stage');
 const video         = document.getElementById('camera-video');
 const canvas        = document.getElementById('three-canvas');
+const switchCamBtn  = document.getElementById('switch-cam-btn');
+const reticleBtn    = document.getElementById('reticle-btn');
 const resetBtn      = document.getElementById('reset-btn');
 const shutterBtn    = document.getElementById('shutter-btn');
 const resultScreen  = document.getElementById('result-screen');
@@ -116,34 +122,43 @@ const rim = new THREE.DirectionalLight(0xcfe8ff, BASE_RIM_INTENSITY);
 rim.position.set(-1.5, 1.8, -2.0);
 scene.add(rim);
 
-// 環境光推定(平均色/輝度/簡易光源方向/露出)は js/lighting.js に委譲。
-// (Sprint 1 Task 1, Task 3。詳細はdocs/SPRINT_1_REPORT.md参照)
-const environmentLighting = createEnvironmentLighting({
-  video, hemi, dir, rim, renderer,
-  baseIntensities: { hemi: BASE_HEMI_INTENSITY, dir: BASE_DIR_INTENSITY, rim: BASE_RIM_INTENSITY },
-  baseToneExposure: BASE_TONE_EXPOSURE,
-});
-
-// 足元の影(Contact Shadow)とThree.js標準ShadowMapによる太陽光の影
-// (Directional Shadow)は js/shadow/ 以下のShadowRigに委譲。
+// 足元の影(Contact Shadow・太陽光によるDirectional Shadow・環境連動の
+// 濃さ補正)は js/shadow/ 以下のShadowRigに委譲(ADR-014)。
 // rendererを渡すとshadowMap.enabled/typeを自動設定する。
 const shadowRig = createShadowRig(scene, { renderer, quality: 'medium' });
 
-/* ============================================================
-   診断機能(環境解析/投影整合性チェック/距離較正/画面内デバッグ)
-   ------------------------------------------------------------
-   実体はjs/diagnostics.jsに切り出した(main.jsの責務を増やさないため)。
-   GPS取得の許可はユーザーから明示的に得た上での利用。
-   CONSTRAINTS.mdの「AIによる環境認識」節はまだ正式な対象内格上げの
-   承認を経ていないため、この一式はドラフト運用のまま。
-   ============================================================ */
+// 環境解析(GPS/太陽位置/カメラ画像解析)・投影整合性チェック・距離較正・
+// 画面内デバッグコンソールの初期化。CONSTRAINTS.md 1節の通り、まだ
+// ドラフト運用の位置づけ(将来CONSTRAINTS.md改訂で正式化する)。
 const diagnostics = initDiagnostics({
   video, stage, camera, renderer,
   getCharacter: () => activeCharacter,
   placement,
-  applyPlacement: () => applyPlacement(),
-  baseVerticalFovDeg: () => FOV_BY_FACING[facingMode],
+  applyPlacement,
+  baseVerticalFovDeg: () => camera.fov,
 });
+
+// 環境光推定(平均色/輝度/簡易光源方向/露出)は js/lighting.js に委譲。
+// getEnvironmentStateを渡すことで、EnvironmentAnalyzerのaverageLuminance/
+// skyColor/groundColorを既存の画像ベース推定へ弱くブレンドする(js/lighting.js参照)。
+const environmentLighting = createEnvironmentLighting({
+  video, hemi, dir, rim, renderer,
+  baseIntensities: { hemi: BASE_HEMI_INTENSITY, dir: BASE_DIR_INTENSITY, rim: BASE_RIM_INTENSITY },
+  baseToneExposure: BASE_TONE_EXPOSURE,
+  getEnvironmentState: () => diagnostics.getEnvironmentState(),
+});
+
+// コンパス較正(ADR-014の既知の制約への対応、ROADMAP.md「太陽方位角の
+// コンパス較正」)。iOS SafariのwebkitCompassHeadingを使い、
+// EnvironmentAnalyzerのsunAzimuth(地理方位)をこのアプリのAR空間内での
+// 相対角へ変換する。詳細はjs/compass-calibration.js冒頭コメント参照。
+const compassCalibration = createCompassCalibration();
+
+// 20260722平面推定指示書 Part1: 固定高さの仮想床。
+const groundEstimator = new GroundEstimator(DEFAULT_PLACEMENT.y);
+// 20260722平面推定指示書 Part2〜4: 配置レティクル。
+const placementReticle = new PlacementReticle(scene);
+let placementMode = false;
 
 /* ============================================================
    キャラクターの抽象化・材質調整・ロード処理は js/character.js に委譲。
@@ -172,23 +187,11 @@ function loadCharacter(def) {
 }
 
 /* ============================================================
-   表情バー・ポーズバー・ポーズ調整パネル
-   ------------------------------------------------------------
-   実体はjs/pose-ui.jsに共通化(dev.jsのPC開発者モードと共有)。
-   ============================================================ */
-/* ============================================================
    ポーズ/表情セレクター(分割リング)
    ------------------------------------------------------------
-   以前はpose-bar/expression-barという横スクロール帯を2本重ねる方式
-   だったが、項目数が増えると画面外にはみ出す・一部が隠れる問題が
-   繰り返し発生していた。シャッターを中心とした1枚の円盤を扇形に分割する
-   方式(js/pose-ring.js)に変更し、カテゴリ(ポーズ/表情)はcat-chipの
-   タップで巡回する。実体はグローバルスクリプトのwindow.PoseRingとして
+   実体はグローバルスクリプトのwindow.PoseRingとして
    index.htmlで先に読み込んでいる(main.jsより前・type=moduleではない
    通常scriptとして読み込むことで、main.js側からそのまま参照できる)。
-   ポーズ調整パネル(createPoseTuner)・トースト表示・接地影の再計算
-   (applyPlacement)は、以前buildPoseBarのonSelect内で行っていたものを
-   そのまま踏襲している。
    ============================================================ */
 function buildPoseRing(def) {
   const poseItems = Object.entries(def.poses).map(([key, p]) => ({ key, emoji: p.emoji, label: p.label }));
@@ -219,36 +222,42 @@ function buildPoseRing(def) {
    ============================================================ */
 function applyPlacement() {
   if (!activeCharacter) return;
-  activeCharacter.setTransform(placement);
-  const footY = activeCharacter.getFootY();
-  const width = activeCharacter.getWidth();
-  // 2本指縦ドラッグでplacement.zを実際に動かせるようになったことで、
-  // 距離が初めて意味を持つようになった。距離に応じた空気遠近法
-  // (彩度・コントラスト・輪郭線の減衰)と、影の距離フェードの両方で
-  // 同じ距離値を使う(atmosphere.js側のNEAR_M〜FAR_Mが単一の基準になる)。
+
   const distanceFromCam = Math.abs(placement.z - camera.position.z);
 
-  // 環境解析(GPS/太陽位置/カメラ画像解析、js/diagnostics.js)による屋内外推定を、
-  // 影の光源方向ヒントの信頼度としてのみ反映する。屋内では実際の照明方向は
-  // 太陽方位角と無関係であり、かつlighting.jsの輝度重心法による方向推定は
-  // 屋内でこそ外れやすいことがSPRINT_1_REPORT.mdで既知の限界として記録
-  // されている。よって屋内と判定された場合はshadow-rig.js側の光源方向ヒント
-  // (既にごく弱い効果として実装済み、外側soft影のみ)をさらに大きく減衰させる。
-  // GPS/太陽位置そのもの(sunAzimuth)はまだシーン座標系にマッピングしていない
-  // (端末の絶対方位[コンパス]を取得していないため、意味のある変換ができない。
-  // 既知の制約として残す)。lighting.js/postfx.jsへの統合は、確認しながら
-  // 段階的に進める方針。
+  // 20260722平面推定指示書 Part7/Part8: 知覚スケール補正はあくまで演出。
+  // placement.scale自体は書き換えず、setTransformへ渡す直前でのみ
+  // 乗算する(ピンチ拡縮・キャラクター設定・将来の保存データに
+  // 補正が混入しないようにするため)。
+  const perceptualFactor = computePerceptualScaleFactor(distanceFromCam);
+  activeCharacter.setTransform({ ...placement, scale: placement.scale * perceptualFactor });
+
+  const footY = activeCharacter.getFootY();
+  const width = activeCharacter.getWidth();
+
   const azimuthConfidence = diagnostics.getAzimuthConfidence();
-  // ShadowRig(Directional/Environment Shadow)の主入力。診断モジュールが
-  // EnvironmentState全体を返せない場合はnullにフォールバックし、
-  // azimuthConfidenceのみでの後方互換動作になる(shadow-rig.js参照)。
-  const environmentState = typeof diagnostics.getEnvironmentState === 'function'
-    ? diagnostics.getEnvironmentState()
-    : null;
+  const environmentState = diagnostics.getEnvironmentState();
+
+  // 20260722影修正指示書 Part1 + コンパス較正:
+  // 屋外・GPS精度良好・コンパス較正済みの場合は地理方位ベースのAR相対角を
+  // 優先し、それ以外は従来通りlighting.jsの画像ベース推定を使う。
+  // (このGPS優先化はADR-014の既知の制約と関わるため、詳細な経緯・
+  //  実機確認が必要な点はOPEN_ITEMSを参照)
+  let lightAzimuthDeg = environmentLighting.getEstimatedAzimuthDeg();
+  if (
+    environmentState &&
+    environmentState.environmentType !== 'indoor' &&
+    environmentState.gpsAccuracy != null && environmentState.gpsAccuracy <= 20 &&
+    environmentState.sunAzimuth != null &&
+    compassCalibration.isCalibrated()
+  ) {
+    const calibratedAzimuth = compassCalibration.toARRelativeAzimuth(environmentState.sunAzimuth);
+    if (calibratedAzimuth != null) lightAzimuthDeg = calibratedAzimuth;
+  }
 
   shadowRig.update(
     footY, width, placement,
-    environmentLighting.getEstimatedAzimuthDeg(),
+    lightAzimuthDeg,
     environmentLighting.getBrightnessFactor(),
     distanceFromCam,
     camera.position,
@@ -257,6 +266,44 @@ function applyPlacement() {
   );
   applyAtmosphericPerspective(activeCharacter.root, distanceFromCam);
 }
+
+/* ============================================================
+   配置レティクル(20260722平面推定指示書 Part5/6)
+   ------------------------------------------------------------
+   単一の🎯ボタンで「配置モードへ入る」「今の位置に確定する」を
+   兼ねるトグル式にしている(tuneBtn等、既存のUIパターンに合わせた)。
+     1回目のタップ: 配置モードON、レティクル表示開始
+     2回目のタップ: レティクルの位置で確定し、配置モードOFF
+   ============================================================ */
+function confirmPlacement() {
+  const pose = placementReticle.getPlacementPose();
+  if (!pose) {
+    showPoseToast('その場所には配置できません');
+    return;
+  }
+  placement.x = pose.position.x;
+  placement.y = pose.position.y;
+  placement.z = pose.position.z;
+  // rotationYは「初期設定値をそのまま使う」設計(placement-reticle.js参照)。
+  groundEstimator.setGroundHeight(pose.position.y);
+  applyPlacement();
+  placementMode = false;
+  placementReticle.hide();
+  reticleBtn.classList.remove('active');
+  showPoseToast('この場所に配置しました');
+}
+
+reticleBtn.addEventListener('click', () => {
+  if (!activeCharacter) return;
+  if (!placementMode) {
+    placementMode = true;
+    reticleBtn.classList.add('active');
+    placementReticle.show();
+    showPoseToast('画面中央を床に向けてもう一度🎯を押すと配置します');
+  } else {
+    confirmPlacement();
+  }
+});
 
 /* ============================================================
    ジャイロAR（3DoF）
@@ -288,10 +335,19 @@ function deviceOrientationToQuaternion(alphaDeg, betaDeg, gammaDeg, out) {
   return out;
 }
 function onDeviceOrientation(e) {
+  // コンパス較正(js/compass-calibration.js): iOS Safariのみ存在する
+  // 非標準プロパティ。受信するたびに最新値を記録しておく。
+  compassCalibration.recordHeading(e.webkitCompassHeading);
+
   if (e.alpha === null) return;
   if (!gyroCurQuat) gyroCurQuat = new THREE.Quaternion();
   deviceOrientationToQuaternion(e.alpha, e.beta, e.gamma, gyroCurQuat);
-  if (!gyroRefQuat) gyroRefQuat = gyroCurQuat.clone();
+  if (!gyroRefQuat) {
+    gyroRefQuat = gyroCurQuat.clone();
+    // ジャイロの基準姿勢を初めて設定した瞬間のコンパス方位を、
+    // 「ARワールドの-Z方向に対応する地理方位」として記録する。
+    compassCalibration.setReference();
+  }
 }
 async function requestGyroPermission() {
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
@@ -308,6 +364,8 @@ function enableGyro() {
 }
 function reanchorGyro() {
   gyroRefQuat = gyroCurQuat ? gyroCurQuat.clone() : null;
+  // ⟲(基準リセット)時も、その瞬間のコンパス方位を新しい基準として取り直す。
+  compassCalibration.setReference();
 }
 
 /* ============================================================
@@ -387,11 +445,7 @@ function stopCamera() {
 }
 function onVideoMeta() {
   sizeStageToVideo(video.videoWidth || 1080, video.videoHeight || 1920);
-  // AR精度検証項目①「投影行列がスマートフォン実カメラの画角と一致しているか」の
-  // 数値チェック。実体はjs/diagnostics.js(内部でjs/camera-projection.js使用)。
-  diagnostics.logProjectionConsistency();
 }
-
 function sizeStageToVideo(vw, vh) {
   const aspect = vw / vh;
   const wrapRect = stageWrap.getBoundingClientRect();
@@ -420,7 +474,7 @@ window.addEventListener('orientationchange', () => {
    ジェスチャー操作
    ------------------------------------------------------------
    1本指ドラッグ: X/Y移動
-   1本指タップ(短時間・ほぼ動かさない): タップした床の位置へ自動配置 ← 今回追加
+   1本指タップ(短時間・ほぼ動かさない): タップした床の位置へ自動配置
    2本指ピンチ: 拡縮(scale)
    2本指ひねり: 回転(rotY)
    2本指の縦方向の動き: 奥行き(Z)移動
@@ -430,12 +484,6 @@ const TAP_MAX_MOVE_PX = 12;
 const TAP_MAX_DURATION_MS = 350;
 
 // 2本指の縦ドラッグでどこまでZを動かせるか(m、カメラ前方向)。
-// MIN_CHARACTER_DISTANCEが「一番遠い(zが最も負)」、
-// MAX_CHARACTER_DISTANCEが「一番近い(カメラに寄る)」側の上限。
-// 想定撮影距離は無人駅の対向ホーム等を見据えて概ね20m程度までを狙っており、
-// atmosphere.jsのFAR_M(空気遠近法が最大効果になる距離)もこれに合わせて
-// 20mにしている。ここの-25mはそれに対する若干の余裕(headroom)であり、
-// atmosphere.jsのFAR_Mを変える場合はこちらとの整合も見直すこと。
 const MIN_CHARACTER_DISTANCE_Z = -25;
 const MAX_CHARACTER_DISTANCE_Z = -0.8;
 // 縦ドラッグの感度係数。1.0が「指の動きと同じ量だけ実距離が動く」基準値で、
@@ -443,12 +491,7 @@ const MAX_CHARACTER_DISTANCE_Z = -0.8;
 const DEPTH_DRAG_GAIN = 1.3;
 
 // 2本指ジェスチャーが「拡縮/回転(planar)」なのか「奥行き移動(depth)」なのかを
-// 判定してロックするまでの猶予(px)。人間が指を広げて拡大しようとする動作は、
-// 中点(2点の中間座標)がわずかに上下にブレるのが普通で、この揺れをそのまま
-// Z移動として毎フレーム適用すると「拡大したつもりが奥へ逃げて縮んで見える」
-// 事故が起きる。一定量はっきり動くまではどちらの軸にも反映せず待ち、
-// 動きの支配的な方向が判明した時点で片方の軸にロックする(ジェスチャー終了まで
-// 固定し、以後は逆側の軸の変化を無視する)。
+// 判定してロックするまでの猶予(px)。
 const GESTURE_LOCK_THRESHOLD_PX = 14;
 const GESTURE_LOCK_ANGLE_RAD = THREE.MathUtils.degToRad(6);
 
@@ -469,14 +512,10 @@ const _floorRaycaster = new THREE.Raycaster();
  * 画面上の1点(clientX/Y)を、キャラクターが「今すでに立っている高さ」と
  * 同じ水平面に投影し、そのワールド座標(x,z)を返す。
  *
- * カメラの実際の高さ(地面からの距離)は分からないため、それを仮定で
- * 決め打ちすると外した時に浮く/沈む原因になる。代わりに「床は水平で、
- * 今のキャラの足元と同じ高さで続いている」という仮定だけを使うことで、
- * カメラ高さの推定を一切必要とせず、今すでに接地できている状態からの
- * 再配置に限って頑丈に機能する。
- *
- * @returns {THREE.Vector3|null} 交点のワールド座標。カメラが上を向いている等で
- *   床と交わらない場合はnull。
+ * 【CONSTRAINTS.md 5節との関係】この関数はcamera.quaternion(ジャイロ由来の
+ * カメラ姿勢)を経由するレイキャストを行っており、CONSTRAINTS.md 5節の
+ * 絶対制約(カメラ姿勢を位置決めに使わない)と関わる既知の論点がある。
+ * 既存のタップ配置機能として維持しているが、詳細はOPEN_ITEMSを参照。
  */
 function computeFloorPointFromScreen(clientX, clientY) {
   if (!activeCharacter) return null;
@@ -516,8 +555,6 @@ stage.addEventListener('touchstart', (e) => {
     touchState.mode = 'drag';
     touchState.lastX = e.touches[0].clientX; touchState.lastY = e.touches[0].clientY;
     // タップ判定用: 1本指シーケンスの開始時点の情報を記録する。
-    // 直前まで2本指ジェスチャー中でなかった(=このタッチが最初から
-    // 1本指だった)場合のみタップ候補として扱う。
     touchState.startX = e.touches[0].clientX;
     touchState.startY = e.touches[0].clientY;
     touchState.startTime = Date.now();
@@ -557,11 +594,6 @@ stage.addEventListener('touchmove', (e) => {
     const midYDeltaPx = midY - touchState.startMidY;
     const angleDeltaRad = normalizeAngle(angle - touchState.startAngle);
 
-    // どちらの軸として操作されているかを、動きが一定量を超えた時点で
-    // 一度だけ判定してロックする(ジェスチャー終了までそのまま)。
-    // 縦方向の動きが横方向のピンチ変化よりはっきり大きい場合のみ
-    // depth(奥行き)と判定し、それ以外(ピンチ変化 or ひねり回転が先に
-    // 一定量を超えた場合)はplanar(拡縮/回転)と判定する。
     if (!touchState.gestureLock) {
       if (Math.abs(midYDeltaPx) > GESTURE_LOCK_THRESHOLD_PX &&
           Math.abs(midYDeltaPx) > Math.abs(distDeltaPx) * 1.5) {
@@ -579,8 +611,6 @@ stage.addEventListener('touchmove', (e) => {
     }
 
     if (touchState.gestureLock !== 'planar') {
-      // 2本指の縦方向の動き＝奥行き(Z)移動。指を上へ動かすと奥へ押し出し、
-      // 下へ動かすと手前へ引き寄せる(「押す/引く」の直感的な対応)。
       const rect = stage.getBoundingClientRect();
       const distFromCamAtStart = Math.abs(touchState.startZ - camera.position.z);
       const depthPerPixel = distFromCamAtStart / rect.height;
@@ -597,15 +627,11 @@ stage.addEventListener('touchmove', (e) => {
 
 stage.addEventListener('touchend', (e) => {
   e.preventDefault();
-  // タップ判定: 直前まで2本指ジェスチャーを一切経由しておらず、
-  // 移動量・経過時間がともに小さい1本指タッチだけを「タップ」として扱う。
-  // (2本指ジェスチャー終了後に指が1本だけ残ってすぐ離れるケースを
-  // 誤ってタップと判定しないよう、hadMultiTouchで除外する)
   if (touchState.mode === 'drag' && !touchState.hadMultiTouch && e.changedTouches.length > 0) {
     const t = e.changedTouches[0];
     const movedPx = Math.hypot(t.clientX - touchState.startX, t.clientY - touchState.startY);
     const elapsedMs = Date.now() - touchState.startTime;
-    if (movedPx <= TAP_MAX_MOVE_PX && elapsedMs <= TAP_MAX_DURATION_MS) {
+    if (movedPx <= TAP_MAX_MOVE_PX && elapsedMs <= TAP_MAX_DURATION_MS && !placementMode) {
       placeCharacterAtScreenPoint(t.clientX, t.clientY);
     }
   }
@@ -622,22 +648,18 @@ resetBtn.addEventListener('click', () => {
   reanchorGyro();
 });
 
-/* ============================================================
-   構図グリッド／セルフタイマー
-   ============================================================ */
-const shadowDebugBtn = document.getElementById('shadow-debug-btn');
-let shadowDebugOn = false;
-shadowDebugBtn.addEventListener('click', () => {
-  shadowDebugOn = !shadowDebugOn;
-  shadowRig.setDebugEnabled(shadowDebugOn);
-  shadowDebugBtn.classList.toggle('active', shadowDebugOn);
-  if (shadowDebugOn) {
-    // CameraHelperの可視化に加え、判定理由をコンソールへ定期出力する
-    // (画面上への常時HUD表示はdev.js対応時にまとめて実装する方針)
-    console.log('[shadow-debug]', shadowRig.getDebugInfo());
-  }
+switchCamBtn.addEventListener('click', async () => {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  camera.fov = FOV_BY_FACING[facingMode];
+  camera.updateProjectionMatrix();
+  await startCamera();
+  environmentLighting.start();
+  diagnostics.start();
 });
 
+/* ============================================================
+   セルフタイマー
+   ============================================================ */
 const TIMER_OPTIONS = [0, 3, 10];
 let timerIndex = 0;
 function updateTimerBtnLabel() {
@@ -653,11 +675,6 @@ updateTimerBtnLabel();
 
 /* ============================================================
    アングル(フレーミング)切替
-   ------------------------------------------------------------
-   キャラクターの配置(placement)ではなく、カメラの位置を前後・上下に
-   動かす(ドリー)方式にしている。これによりユーザーがドラッグで
-   決めたキャラクターの立ち位置と干渉せず、ズーム相当の効果が出せる。
-   数値は実機未検証のたたき台。
    ============================================================ */
 const FRAMING_PRESETS = {
   full:  { label: '全身',     camZ: 0,    camY: 0 },
@@ -671,9 +688,6 @@ function applyFraming(key) {
   currentFramingKey = key;
   camera.position.z = p.camZ;
   camera.position.y = p.camY;
-  // カメラ位置(距離)が変わるため、距離依存の演出(空気遠近法・接地影の
-  // フェード/潰れ補正)を再計算する。これを呼ばないと、フレーミング切替の
-  // 前に計算された古い距離のままになり、見た目とズレが生じる。
   applyPlacement();
 }
 function buildFramingBar() {
@@ -707,7 +721,6 @@ function runCountdown(seconds) {
         resolve();
         return;
       }
-      // 同じ数字でもCSSアニメーションが再生されるよう一度クリアしてから設定
       countdownNum.textContent = '';
       requestAnimationFrame(() => { countdownNum.textContent = String(remaining); });
       setTimeout(tick, 1000);
@@ -732,10 +745,6 @@ function capture() {
   ctx.drawImage(video, 0, 0, vw, vh);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.drawImage(renderer.domElement, 0, 0, vw, vh);
-  // 写真としての仕上げ処理(ビネット/グレイン/色収差/疑似ブルーム/カラーグレーディング)。
-  // ライブプレビューには適用せず、撮影結果にのみ1回だけ適用する設計
-  // (詳細はjs/postfx.js冒頭のコメント参照)。環境光推定の平均色をティントとして渡し、
-  // モデルだけでなく写真全体の色を撮影場所の雰囲気へ寄せる。
   applyPhotoFinish(out, { envTint: environmentLighting.getEstimatedTintColor() });
   out.toBlob((blob) => {
     showResult(blob, false);
@@ -853,7 +862,6 @@ modeBtn.addEventListener('click', () => {
 let isCapturing = false;
 async function onShutterPress() {
   if (isVideoMode) {
-    // 動画モード：録画中なら停止、していなければ開始する(トグル式)
     if (isRecording) {
       if (navigator.vibrate) navigator.vibrate(20);
       stopVideoRecording();
@@ -907,8 +915,7 @@ shareBtn.addEventListener('click', async () => {
    ------------------------------------------------------------
    ユーザー操作が30秒以上ない場合、既存のwaveポーズ+wink表情、
    または上半身の左右揺れ(setGlobalOffset('bodyYaw'))のいずれかを
-   自動再生する。撮影中(isCapturing)・録画中(isRecording)・
-   カウントダウン中は発動させない。
+   自動再生する。撮影中・録画中・カウントダウン中は発動させない。
    ============================================================ */
 const idleMotion = createIdleMotionManager({
   getCharacter: () => activeCharacter,
@@ -929,13 +936,14 @@ function animate() {
 
   if (gyroEnabled && gyroRefQuat && gyroCurQuat) {
     const targetDelta = gyroCurQuat.clone().multiply(gyroRefQuat.clone().invert());
-    // 指数減衰(半減期ベース)でスラープすることでセンサーノイズによる
-    // 微小な震えを均し、実際の動きにはきちんと追従させる。
     const halfLife = 0.06;
     const t = 1 - Math.pow(2, -dt / halfLife);
     camera.quaternion.slerp(targetDelta, t);
   }
   if (activeCharacter) activeCharacter.update(dt);
+  if (placementMode) {
+    placementReticle.update(groundEstimator.getGroundPlane(), camera, dt);
+  }
   effect.render(scene, camera);
 }
 animate();
@@ -944,28 +952,13 @@ animate();
    起動フロー
    ============================================================ */
 function initCharacterSelect() {
-  // キャラクター画面が表示されない場合のデバッグ用ログ
-  console.log('[OshiCamera] initCharacterSelect called. CHARACTERS.length =', CHARACTERS.length);
-  console.log('[OshiCamera] selectScreen =', selectScreen, 'characterList =', characterList);
-  
-  if (!selectScreen || !characterList) {
-    console.error('[OshiCamera] ERROR: selectScreen or characterList not found in DOM');
-    return;
-  }
-  
-  // キャラクターが0体の場合は選択画面を非表示
-  if (CHARACTERS.length === 0) {
+  if (CHARACTERS.length <= 1) {
     selectScreen.style.display = 'none';
     currentCharacterIndex = 0;
-    console.log('[OshiCamera] No characters, hiding select-screen');
     return;
   }
-  
-  // 1体以上のキャラクターがいる場合は選択画面を表示
   selectScreen.style.display = 'flex';
   characterList.innerHTML = '';
-  console.log('[OshiCamera] Displaying select-screen with', CHARACTERS.length, 'character(s)');
-  
   CHARACTERS.forEach((def, i) => {
     const card = document.createElement('div');
     card.className = 'character-card';
@@ -973,19 +966,11 @@ function initCharacterSelect() {
     card.addEventListener('click', () => {
       currentCharacterIndex = i;
       selectScreen.style.display = 'none';
-      console.log('[OshiCamera] Selected character:', def.name);
     });
     characterList.appendChild(card);
   });
 }
-
-// DOMContentLoaded後に初期化を実行する（モジュール読み込み時点ではまだDOM準備中の可能性があるため）
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initCharacterSelect);
-} else {
-  // すでにDOMContentLoadedイベント後の場合は即座に実行
-  initCharacterSelect();
-}
+initCharacterSelect();
 
 startBtn.addEventListener('click', async () => {
   startError.textContent = '';

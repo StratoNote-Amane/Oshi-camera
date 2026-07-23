@@ -119,18 +119,6 @@ html, body {
 .icon-btn:active { background: rgba(255,255,255,.2); }
 .icon-btn.active { background: rgba(231,185,76,.3); border-color: #e7b94c; }
 
-/* ===== 構図グリッド ===== */
-#grid-overlay {
-  position: absolute; inset: 0; pointer-events: none;
-  display: none;
-  background:
-    linear-gradient(rgba(255,255,255,.55) 1px, transparent 1px) 0 33.333%/100% 33.334% no-repeat,
-    linear-gradient(rgba(255,255,255,.55) 1px, transparent 1px) 0 66.667%/100% 33.334% no-repeat,
-    linear-gradient(90deg, rgba(255,255,255,.55) 1px, transparent 1px) 33.333% 0/33.334% 100% no-repeat,
-    linear-gradient(90deg, rgba(255,255,255,.55) 1px, transparent 1px) 66.667% 0/33.334% 100% no-repeat;
-}
-#grid-overlay.show { display: block; }
-
 /* ===== 撮影フラッシュ演出 ===== */
 #flash-overlay {
   position: fixed; inset: 0; z-index: 260;
@@ -161,12 +149,7 @@ html, body {
   pointer-events: none;
 }
 
-/* ===== ポーズ/表情セレクター：シャッターを中心とした分割リング =====
-   以前はpose-bar/expression-barという横スクロール帯を2本重ねていたが、
-   項目数が増えると画面外にはみ出す・隠れる問題が繰り返し発生していた。
-   シャッターの周囲を扇形に分割した1枚の円盤に統合し、カテゴリ(ポーズ/表情)は
-   cat-chipで巡回する。位置はjs/pose-ring.jsがシャッターの実座標から
-   毎回算出するため、ここでのbottom値は初期表示までのフォールバックに過ぎない。 */
+/* ===== ポーズ/表情セレクター：シャッターを中心とした分割リング ===== */
 #cat-chip {
   position: fixed; left: 50%; transform: translateX(-50%);
   bottom: calc(env(safe-area-inset-bottom, 0px) + 240px); /* js側で実測に上書きされる初期値 */
@@ -307,19 +290,10 @@ html, body {
 }
 #pose-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* ===== ポーズ調整パネル ===== */
-#pose-panel {
-  display: none;
-  position: fixed; left: 12px; right: 12px;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
-  z-index: 250;
-  background: rgba(14,16,22,.94);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(255,255,255,.15);
-  border-radius: 16px;
-  padding: 14px 16px calc(16px + env(safe-area-inset-bottom, 0px));
-}
-#pose-panel.show { display: block; }
+/* ===== ポーズ調整パネル 共有クラス =====
+   注意: スマホ版(main.js/index.html)自体はポーズ調整パネルのモジュールを
+   廃止したため#pose-panel(ID)は使わないが、以下のクラス群はdev.html
+   (#dev-tune-panel)が直接同じクラス名で参照しているため削除しない。 */
 .pose-panel-head {
   display: flex; justify-content: space-between; align-items: center;
   font-size: 13px; font-weight: 700; margin-bottom: 10px; color: #e7b94c;
