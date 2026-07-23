@@ -260,7 +260,7 @@ function applyPlacement() {
     environmentState.environmentType !== 'indoor' &&
     environmentState.gpsAccuracy != null && environmentState.gpsAccuracy <= 20 &&
     environmentState.sunAzimuth != null &&
-    compassCalibration.isCalibrated()
+    compassCalibration.isAvailable()
   ) {
     const calibratedAzimuth = compassCalibration.toARRelativeAzimuth(environmentState.sunAzimuth);
     if (calibratedAzimuth != null) lightAzimuthDeg = calibratedAzimuth;
@@ -358,79 +358,60 @@ function confirmInitialPlacement() {
 }
 
 /* ============================================================
-   ジャイロAR（3DoF）
+   方位センサー(コンパス較正専用、カメラ回転には使わない)
+   ------------------------------------------------------------
+   【2026/07/26 設計変更の経緯】
+   これまでDeviceOrientationEvent(alpha/beta/gamma)から求めた
+   クォータニオンをcamera.quaternionへ毎フレーム反映し、「スマホの
+   向きを変えてもキャラクターがその場に立っているように見える」
+   3DoFジャイロAR(ADR-002)を実装していた。しかし実機で
+   「スマホを傾けるとキャラクターが横に傾いて不自然」「レティクルの
+   床認識が安定しない」という2つの問題が解消しなかった。
+
+   ARKit(IKEA Place等)の実際の仕組みを調べ直したところ、これらの
+   アプリは加速度センサー/ジャイロだけでなく、カメラ画像の特徴点を
+   継続的に追跡する視覚慣性オドメトリ(VIO)によって「回転」だけでなく
+   「並進移動(スマホの位置そのもの)」までリアルタイムに推定しており、
+   それによって初めて「置いた物が本当にその場に固定されて見える」
+   体験が成立している(参考: Appleの公式ARKitサンプル解説、
+   ARKit Planes/Hit-Test系の各種技術記事)。本アプリはWeb(Safari)
+   専用で、WebXR Device APIもSafariでは利用できず、ARKitのような
+   視覚慣性オドメトリには技術的にアクセスできない(CONSTRAINTS.md/
+   ADR-001の制約)。つまり「回転センサーの値だけ」からVIO相当の
+   体験を再現しようとすること自体が、原理的に無理のある設計だった。
+
+   そこで今回、方針を変更する:
+   - camera.quaternionはジャイロで動かさず、常に固定(初期値)のままにする。
+     これにより「スマホを傾けるとキャラクターが傾いて見える」問題は
+     原理的に解消する(動かす入力自体が無くなるため)。
+   - 配置レティクル(placement-reticle.js)のレイキャストは、
+     「常に同じ向きの固定カメラ」に対する計算になるため、センサー
+     ノイズの影響を受けず、フレームごとに結果が安定する
+     (ADR-014が問題視していた「視線角度が変わるたびに交点が暴れる」
+     現象は、視線そのものが変化しなくなったことで構造的に解消される)。
+   - 「配置したら最初の位置から動かない」という要望にも、これで
+     directに応える(スマホの向きが変わっても一切追従しない)。
+   - DeviceOrientationEventの購読自体は残すが、用途を
+     webkitCompassHeading(コンパス較正、影の方位補正用)の取得のみに
+     縮小する。
    ============================================================ */
-let gyroEnabled = false;
-let gyroRefQuat = null;
-let gyroCurQuat = null;
-
-const _zee = new THREE.Vector3(0, 0, 1);
-const _euler = new THREE.Euler();
-const _q0 = new THREE.Quaternion();
-const _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
-
-function getScreenOrientationRad() {
-  const angle = (screen.orientation && typeof screen.orientation.angle === 'number')
-    ? screen.orientation.angle
-    : (window.orientation || 0);
-  return THREE.MathUtils.degToRad(angle);
-}
-function deviceOrientationToQuaternion(alphaDeg, betaDeg, gammaDeg, out) {
-  const alpha = THREE.MathUtils.degToRad(alphaDeg || 0);
-  const beta = THREE.MathUtils.degToRad(betaDeg || 0);
-  const gamma = THREE.MathUtils.degToRad(gammaDeg || 0);
-  const orient = getScreenOrientationRad();
-  _euler.set(beta, alpha, -gamma, 'YXZ');
-  out.setFromEuler(_euler);
-  out.multiply(_q1);
-  out.multiply(_q0.setFromAxisAngle(_zee, -orient));
-  return out;
-}
-// 「スマホが傾くとキャラクターがそのまま傾いて見える」違和感への対応。
-// DeviceOrientationEventの3軸のうち、gamma(左右のロール、スマホを
-// 左右に傾ける動き)をそのまま3Dカメラへ反映すると、画面上のキャラクターは
-// 傾けた分だけ逆回転して見え、「人物が頭を傾けたら体ごと傾いた」ような
-// 不自然さになる。実在の多くのARカメラ/VTuberカメラアプリは、この
-// ロール成分を無視(または大幅に減衰)し、水平方向の見回し(alpha=yaw)と
-// 上下の見上げ/見下ろし(beta=pitch)だけを反映することで、キャラクターが
-// 常に直立して見えるようにしている。
-// 0 = ロールを完全に無視(常に直立)、1 = 従来通りのフル3DoF追従。
-// 「多少のロールで臨場感を出したい」場合は0.2〜0.3程度から試すとよい。
-const ROLL_INFLUENCE = 0;
 
 function onDeviceOrientation(e) {
   // コンパス較正(js/compass-calibration.js): iOS Safariのみ存在する
   // 非標準プロパティ。受信するたびに最新値を記録しておく。
   compassCalibration.recordHeading(e.webkitCompassHeading);
-
-  if (e.alpha === null) return;
-  if (!gyroCurQuat) gyroCurQuat = new THREE.Quaternion();
-  const effectiveGamma = (e.gamma || 0) * ROLL_INFLUENCE;
-  deviceOrientationToQuaternion(e.alpha, e.beta, effectiveGamma, gyroCurQuat);
-  if (!gyroRefQuat) {
-    gyroRefQuat = gyroCurQuat.clone();
-    // ジャイロの基準姿勢を初めて設定した瞬間のコンパス方位を、
-    // 「ARワールドの-Z方向に対応する地理方位」として記録する。
-    compassCalibration.setReference();
-  }
 }
-async function requestGyroPermission() {
+async function requestOrientationPermission() {
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
     try {
       const res = await DeviceOrientationEvent.requestPermission();
       return res === 'granted';
-    } catch (e) { console.warn('gyro permission error', e); return false; }
+    } catch (e) { console.warn('orientation permission error', e); return false; }
   }
   return typeof DeviceOrientationEvent !== 'undefined';
 }
-function enableGyro() {
-  gyroEnabled = true;
+function enableOrientationSensing() {
   window.addEventListener('deviceorientation', onDeviceOrientation);
-}
-function reanchorGyro() {
-  gyroRefQuat = gyroCurQuat ? gyroCurQuat.clone() : null;
-  // ⟲(基準リセット)時も、その瞬間のコンパス方位を新しい基準として取り直す。
-  compassCalibration.setReference();
 }
 
 /* ============================================================
@@ -577,10 +558,12 @@ const _floorRaycaster = new THREE.Raycaster();
  * 画面上の1点(clientX/Y)を、キャラクターが「今すでに立っている高さ」と
  * 同じ水平面に投影し、そのワールド座標(x,z)を返す。
  *
- * 【CONSTRAINTS.md 5節との関係】この関数はcamera.quaternion(ジャイロ由来の
- * カメラ姿勢)を経由するレイキャストを行っており、CONSTRAINTS.md 5節の
- * 絶対制約(カメラ姿勢を位置決めに使わない)と関わる既知の論点がある。
- * 既存のタップ配置機能として維持しているが、詳細はOPEN_ITEMSを参照。
+ * 【2026/07/26追記】この関数はcamera.quaternionを経由するレイキャストを
+ * 行うが、main.jsがジャイロによるcamera.quaternionの更新を廃止したため、
+ * cameraの向きは常に固定(初期値)である。そのためこの関数の結果は
+ * フレームごとに変化しない決定論的な計算になり、以前懸念していた
+ * 「ジャイロ由来の姿勢が不安定なことによる交点の発散」という問題は
+ * 構造的に解消している。
  */
 function computeFloorPointFromScreen(clientX, clientY) {
   if (!activeCharacter) return null;
@@ -714,7 +697,6 @@ stage.addEventListener('touchend', (e) => {
 resetBtn.addEventListener('click', () => {
   Object.assign(placement, DEFAULT_PLACEMENT);
   applyPlacement();
-  reanchorGyro();
 });
 
 switchCamBtn.addEventListener('click', async () => {
@@ -983,15 +965,30 @@ shareBtn.addEventListener('click', async () => {
    待機モーション(20260721ポージング指示書 + 補足指示)
    ------------------------------------------------------------
    ユーザー操作が30秒以上ない場合、既存のwaveポーズ+wink表情、
-   または上半身の左右揺れ(setGlobalOffset('bodyYaw'))のいずれかを
-   自動再生する。撮影中・録画中・カウントダウン中は発動させない。
+   または上半身の左右揺れ(setGlobalOffset('bodyYaw', 最大9度))を
+   自動再生する機能として実装した。
+
+   【2026/07/26時点、既定でOFFにした】
+   「配置後にモデルが傾く/動く」という今回の報告のうち、特に
+   「横に傾く」という症状は、この待機モーションのうち上半身を
+   最大9度左右に揺らす「sway」の可能性がある(30秒操作しないと
+   自動発動する仕様のため、気づかないうちに再生されていた可能性がある)。
+   ジャイロ由来の傾き(方位センサーセクション参照)と切り分けるため、
+   一旦この機能自体を無効化しておく。「配置したら動かない」という
+   要望に対しても、まずはこちらをOFFにするのが安全と判断した。
+   気に入っている場合や、原因が待機モーションではなかったと分かった
+   場合は、IDLE_MOTION_ENABLEDをtrueに戻せばそのまま復活する
+   (js/idle-motion.js自体は変更していない)。
    ============================================================ */
-const idleMotion = createIdleMotionManager({
-  getCharacter: () => activeCharacter,
-  isBusy: () => isCapturing || isRecording,
-});
-idleMotion.attachAutoListeners(stage);
-idleMotion.attachAutoListeners(document.getElementById('ui-layer'));
+const IDLE_MOTION_ENABLED = false;
+if (IDLE_MOTION_ENABLED) {
+  const idleMotion = createIdleMotionManager({
+    getCharacter: () => activeCharacter,
+    isBusy: () => isCapturing || isRecording,
+  });
+  idleMotion.attachAutoListeners(stage);
+  idleMotion.attachAutoListeners(document.getElementById('ui-layer'));
+}
 
 /* ============================================================
    レンダーループ
@@ -1003,12 +1000,9 @@ function animate() {
   const dt = Math.min(0.1, (now - lastTime) / 1000);
   lastTime = now;
 
-  if (gyroEnabled && gyroRefQuat && gyroCurQuat) {
-    const targetDelta = gyroCurQuat.clone().multiply(gyroRefQuat.clone().invert());
-    const halfLife = 0.06;
-    const t = 1 - Math.pow(2, -dt / halfLife);
-    camera.quaternion.slerp(targetDelta, t);
-  }
+  // 2026/07/26: camera.quaternionはジャイロで動かさず、常に固定のまま
+  // にする方針へ変更した(詳細は「方位センサー」セクションのコメント参照)。
+  // そのためここには何も書かない(意図的に空、将来また混乱しないように明記)。
   if (activeCharacter) activeCharacter.update(dt);
   if (placementMode) {
     placementReticle.update(groundEstimator.getGroundPlane(), camera, dt);
@@ -1044,8 +1038,8 @@ initCharacterSelect();
 startBtn.addEventListener('click', async () => {
   startError.textContent = '';
   try {
-    const gyroOK = await requestGyroPermission();
-    if (gyroOK) enableGyro();
+    const orientationOK = await requestOrientationPermission();
+    if (orientationOK) enableOrientationSensing();
     const motionOK = await requestMotionPermission();
     if (motionOK) enableMotionTracking();
     await startCamera();
