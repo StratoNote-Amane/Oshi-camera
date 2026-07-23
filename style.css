@@ -79,11 +79,36 @@ html, body {
 #camera-video.mirror { transform: scaleX(-1); }
 #three-canvas { pointer-events: none; }
 
+/* ===== 初回設置ステップ ===== */
+#placement-intro {
+  display: none;
+  position: fixed; top: calc(env(safe-area-inset-top, 0px) + 90px); left: 50%;
+  transform: translateX(-50%);
+  z-index: 48; max-width: calc(100vw - 48px);
+  pointer-events: none;
+}
+#placement-intro.show { display: block; }
+#placement-intro-text {
+  background: rgba(16,18,24,.85); border: 1px solid rgba(255,255,255,.22);
+  color: #fff; font-size: 14px; line-height: 1.7; text-align: center;
+  padding: 12px 20px; border-radius: 16px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.4);
+}
+
 /* ===== 操作UI ===== */
 #ui-layer {
   position: fixed; inset: 0; z-index: 50;
   display: flex; flex-direction: column; justify-content: space-between;
   pointer-events: none;
+}
+/* 初回設置ステップ中はメインUI(上部ボタン・下部ポーズ/シャッター)を隠し、
+   レティクルと案内バナーだけに集中させる */
+#ui-layer.placement-pending #top-controls,
+#ui-layer.placement-pending #bottom-controls,
+#ui-layer.placement-pending #cat-chip,
+#ui-layer.placement-pending #ring-label,
+#ui-layer.placement-pending #ring-svg {
+  display: none;
 }
 #top-controls { display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
 #top-bar {

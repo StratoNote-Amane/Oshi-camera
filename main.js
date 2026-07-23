@@ -160,6 +160,14 @@ const groundEstimator = new GroundEstimator(DEFAULT_PLACEMENT.y);
 const placementReticle = new PlacementReticle(scene);
 let placementMode = false;
 
+// 実際のARカメラアプリ(Pokémon GO/IKEA Place等)を参考にした初回設置フロー。
+// 「起動直後にまずレティクルで床を狙い、タップで設置してからメインUIが
+// 使えるようになる」体験にするため、モデル読み込み完了後は一旦非表示のまま
+// 待機させ、設置確定後に初めて表示・配置する。
+let pendingInitialPlacement = false;
+const placementIntro = document.getElementById('placement-intro');
+const uiLayer = document.getElementById('ui-layer');
+
 /* ============================================================
    キャラクターの抽象化・材質調整・ロード処理は js/character.js に委譲。
    ============================================================ */
@@ -169,9 +177,12 @@ function loadCharacter(def) {
   loadCharacterCore(def, { MMDLoader, scene }, {
     onLoad: (character) => {
       activeCharacter = character;
-      applyPlacement();
+      // 初回設置が確定するまでキャラクター自体は非表示にしておく
+      // (裏読み込みは先に済ませ、体感の待ち時間を減らす)。
+      character.root.visible = false;
       buildPoseRing(def);
       loadingOverlay.classList.add('hide');
+      beginInitialPlacement();
     },
     onProgress: (xhr) => {
       if (xhr.lengthComputable) {
@@ -294,7 +305,7 @@ function confirmPlacement() {
 }
 
 reticleBtn.addEventListener('click', () => {
-  if (!activeCharacter) return;
+  if (!activeCharacter || pendingInitialPlacement) return;
   if (!placementMode) {
     placementMode = true;
     reticleBtn.classList.add('active');
@@ -304,6 +315,47 @@ reticleBtn.addEventListener('click', () => {
     confirmPlacement();
   }
 });
+
+/**
+ * 初回設置フロー: モデル読み込み完了直後に呼ばれる。実際のARカメラアプリ
+ * (Pokémon GO/IKEA Place等)の「まず床を狙ってタップで設置」という
+ * 導入フローを参考にした。キャラクター・メインUIは隠したまま、
+ * レティクルと案内バナーだけを表示する。
+ */
+function beginInitialPlacement() {
+  pendingInitialPlacement = true;
+  placementMode = true;
+  placementReticle.show();
+  uiLayer.classList.add('placement-pending');
+  placementIntro.classList.add('show');
+}
+
+/**
+ * 初回設置の確定。画面タップ(touchendハンドラ内)から呼ばれる。
+ * レティクルの位置が無効(床が見つかっていない)場合は確定せず、
+ * 案内を出して待ち続ける。
+ */
+function confirmInitialPlacement() {
+  const pose = placementReticle.getPlacementPose();
+  if (!pose) {
+    showPoseToast('床が見つかりません。スマホをもう少し下に向けてください');
+    return;
+  }
+  placement.x = pose.position.x;
+  placement.y = pose.position.y;
+  placement.z = pose.position.z;
+  groundEstimator.setGroundHeight(pose.position.y);
+
+  activeCharacter.root.visible = true;
+  applyPlacement();
+
+  pendingInitialPlacement = false;
+  placementMode = false;
+  placementReticle.hide();
+  uiLayer.classList.remove('placement-pending');
+  placementIntro.classList.remove('show');
+  showPoseToast('この場所に配置しました');
+}
 
 /* ============================================================
    ジャイロAR（3DoF）
@@ -334,6 +386,18 @@ function deviceOrientationToQuaternion(alphaDeg, betaDeg, gammaDeg, out) {
   out.multiply(_q0.setFromAxisAngle(_zee, -orient));
   return out;
 }
+// 「スマホが傾くとキャラクターがそのまま傾いて見える」違和感への対応。
+// DeviceOrientationEventの3軸のうち、gamma(左右のロール、スマホを
+// 左右に傾ける動き)をそのまま3Dカメラへ反映すると、画面上のキャラクターは
+// 傾けた分だけ逆回転して見え、「人物が頭を傾けたら体ごと傾いた」ような
+// 不自然さになる。実在の多くのARカメラ/VTuberカメラアプリは、この
+// ロール成分を無視(または大幅に減衰)し、水平方向の見回し(alpha=yaw)と
+// 上下の見上げ/見下ろし(beta=pitch)だけを反映することで、キャラクターが
+// 常に直立して見えるようにしている。
+// 0 = ロールを完全に無視(常に直立)、1 = 従来通りのフル3DoF追従。
+// 「多少のロールで臨場感を出したい」場合は0.2〜0.3程度から試すとよい。
+const ROLL_INFLUENCE = 0;
+
 function onDeviceOrientation(e) {
   // コンパス較正(js/compass-calibration.js): iOS Safariのみ存在する
   // 非標準プロパティ。受信するたびに最新値を記録しておく。
@@ -341,7 +405,8 @@ function onDeviceOrientation(e) {
 
   if (e.alpha === null) return;
   if (!gyroCurQuat) gyroCurQuat = new THREE.Quaternion();
-  deviceOrientationToQuaternion(e.alpha, e.beta, e.gamma, gyroCurQuat);
+  const effectiveGamma = (e.gamma || 0) * ROLL_INFLUENCE;
+  deviceOrientationToQuaternion(e.alpha, e.beta, effectiveGamma, gyroCurQuat);
   if (!gyroRefQuat) {
     gyroRefQuat = gyroCurQuat.clone();
     // ジャイロの基準姿勢を初めて設定した瞬間のコンパス方位を、
@@ -631,8 +696,12 @@ stage.addEventListener('touchend', (e) => {
     const t = e.changedTouches[0];
     const movedPx = Math.hypot(t.clientX - touchState.startX, t.clientY - touchState.startY);
     const elapsedMs = Date.now() - touchState.startTime;
-    if (movedPx <= TAP_MAX_MOVE_PX && elapsedMs <= TAP_MAX_DURATION_MS && !placementMode) {
-      placeCharacterAtScreenPoint(t.clientX, t.clientY);
+    if (movedPx <= TAP_MAX_MOVE_PX && elapsedMs <= TAP_MAX_DURATION_MS) {
+      if (pendingInitialPlacement) {
+        confirmInitialPlacement();
+      } else if (!placementMode) {
+        placeCharacterAtScreenPoint(t.clientX, t.clientY);
+      }
     }
   }
   if (e.touches.length === 0) touchState.mode = null;
