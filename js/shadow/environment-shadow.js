@@ -19,7 +19,36 @@
    主役にする」という保守的な方針に徹する。これにより、精度の
    低い屋内光源推定を実装する複雑さとリスクを避けつつ、
    「屋内でも不自然に伸びた影が出ない」という実用上の要件を満たす。
+
+   【2026/07/28追記: 屋外判定の妥当性チェックを追加】
+   実機ログで、室内の窓際でGPSが良好に測位できたケースにおいて、
+   environmentType='outdoor'(outdoorScore=100)と判定されている一方、
+   skyColor/groundColorは明らかに室内照明・木製床の色(青みがほぼ無い
+   暖色)だったことを確認した。これは「GPS取得成功→屋外」という
+   EnvironmentAnalyzer側の補正が、画像から得られる色情報と矛盾していても
+   無条件に信用してしまうために起きていると考えられる。
+   EnvironmentAnalyzer本体の判定ロジック(GPS/画像の重み付け)を直すのが
+   本筋だが、その内部コードを確認できていないため、ここでは受け手側の
+   安全弁として「outdoor判定でも空色が青くなければDirectional Shadowを
+   全開にはしない」という妥当性チェックを追加する。あくまで対症療法で
+   あり、EnvironmentAnalyzer本体のGPS/画像の重み付け見直し(EMA・
+   ヒステリシス化)が正式な対応になる。
    ============================================================ */
+
+/**
+ * skyColorが「屋外の空らしい色(青みがある)」かどうかを簡易判定する。
+ * 室内の暖色照明・木材色等は赤/緑に対して青が少ない傾向を利用する。
+ * @param {{r:number,g:number,b:number}|null} skyColor
+ * @returns {boolean} 判定材料が無い場合はtrue(妥当性チェックをスキップし、
+ *   従来通りenvironmentTypeをそのまま信用する)。
+ */
+export function looksLikeOutdoorSky(skyColor) {
+  if (!skyColor) return true;
+  const blueExcess = skyColor.b - (skyColor.r + skyColor.g) / 2;
+  // 青空は本来 blueExcess > 0 になりやすい。曇天等でほぼ無彩色の
+  // ケースも許容するため、閾値はマイナス側に少し余裕を持たせている。
+  return blueExcess > -0.05;
+}
 
 /**
  * @param {object|null} environmentState environment-analyzer.jsのgetState()の戻り値。
@@ -50,35 +79,28 @@ export function computeEnvironmentShadowParams(environmentState) {
     sunAltitude = null,
   } = environmentState;
 
-  // 注意: environment-analyzer.jsのEnvironmentStateに`averageColor`という
-  // フィールドは存在しない(analyzeImage()内部でのみ計算され、stateへは
-  // コピーされていない)。影に乗せる環境色は、代わりに常時保持されている
-  // skyColor/groundColorから合成する(両方あれば平均、片方のみならそれを使う)。
   const averageColor = (skyColor && groundColor)
     ? { r: (skyColor.r + groundColor.r) / 2, g: (skyColor.g + groundColor.g) / 2, b: (skyColor.b + groundColor.b) / 2 }
     : (groundColor || skyColor || null);
 
-  // 屋内outdoorScoreが低いほどDirectional Shadowを弱める。完全な0にはしない
-  // (指示書: 屋内は「弱める、または無効化」であり、判定が際どいケースで
-   // 影が一瞬で消えるより、緩やかに薄くなる方が見た目の破綻が少ない)。
+  const plausibleOutdoor = looksLikeOutdoorSky(skyColor);
+
   let directionalStrength;
   if (environmentType === 'indoor') {
     directionalStrength = 0.08;
   } else if (environmentType === 'outdoor') {
-    directionalStrength = 1.0;
+    // 屋外判定でも空色が屋外らしくない場合は、GPSだけで屋外と誤判定
+    // している可能性が高いとみなし、フル強度にはしない(安全弁)。
+    directionalStrength = plausibleOutdoor ? 1.0 : 0.35;
   } else {
-    // ambiguous: outdoorScore(0-100)を0.08〜1.0へ線形に写像
     directionalStrength = 0.08 + (Math.max(0, Math.min(100, outdoorScore)) / 100) * 0.92;
+    if (!plausibleOutdoor) directionalStrength = Math.min(directionalStrength, 0.35);
   }
 
-  // 太陽が地平線付近/下にある(sunAltitude<=2度)場合は、方位の精度が
-  // 特に信用できず影が極端に伸びやすいため、追加で弱める。
   if (sunAltitude != null && sunAltitude <= 2) {
     directionalStrength *= 0.4;
   }
 
-  // Contact Shadowの濃さ: 明るい環境ほどコントラストが実際には強く出るはずなので
-  // わずかに濃く、暗い環境ではわずかに薄くする(常に完全に消えはしない)。
   const contactContrast = 0.85 + Math.max(0, Math.min(1, averageLuminance)) * 0.3;
 
   const shadowColor = averageColor
@@ -89,6 +111,6 @@ export function computeEnvironmentShadowParams(environmentState) {
     directionalStrength: Math.max(0, Math.min(1, directionalStrength)),
     contactContrast: Math.max(0.5, Math.min(1.15, contactContrast)),
     shadowColor,
-    reason: `${environmentType}(outdoorScore=${Math.round(outdoorScore)})`,
+    reason: `${environmentType}(outdoorScore=${Math.round(outdoorScore)}, plausibleOutdoor=${plausibleOutdoor})`,
   };
 }
