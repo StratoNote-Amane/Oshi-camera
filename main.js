@@ -13,6 +13,7 @@ import { GroundEstimator } from './js/environment/ground-estimator.js';
 import { PlacementReticle } from './js/placement-reticle.js';
 import { computePerceptualScaleFactor } from './js/perceptual-scale.js';
 import { createCompassCalibration } from './js/compass-calibration.js';
+import { looksLikeOutdoorSky } from './js/shadow/environment-shadow.js';
 
 let currentCharacterIndex = 0;
 
@@ -260,7 +261,11 @@ function applyPlacement() {
     environmentState.environmentType !== 'indoor' &&
     environmentState.gpsAccuracy != null && environmentState.gpsAccuracy <= 20 &&
     environmentState.sunAzimuth != null &&
-    compassCalibration.isAvailable()
+    compassCalibration.isAvailable() &&
+    // 2026/07/28追加: GPSが良好でも、空色が屋外らしくない(室内照明の
+    // 暖色等)場合はGPS方位を信用しない。実機で「室内窓際でGPSは良好、
+    // しかしenvironmentType='outdoor'に誤判定される」事例を確認したため。
+    looksLikeOutdoorSky(environmentState.skyColor)
   ) {
     const calibratedAzimuth = compassCalibration.toARRelativeAzimuth(environmentState.sunAzimuth);
     if (calibratedAzimuth != null) lightAzimuthDeg = calibratedAzimuth;
@@ -613,6 +618,13 @@ stage.addEventListener('touchstart', (e) => {
     touchState.startY = e.touches[0].clientY;
     touchState.startTime = Date.now();
     touchState.hadMultiTouch = false;
+    if (placementMode) {
+      // レティクルのドラッグ変換係数は、ドラッグ開始時点の距離で固定する
+      // (2本指の奥行きドラッグと同じ考え方)。ドラッグ中に毎回その場の
+      // 距離から再計算すると、遠くへ動かすほど1px当たりの移動量が
+      // 増え続けて暴走的に感じる不具合になっていた(実機フィードバック対応)。
+      touchState.reticleDistAtStart = Math.abs(placementReticle.getWorldPosition().z - camera.position.z);
+    }
   } else if (e.touches.length >= 2) {
     touchState.mode = 'gesture';
     touchState.hadMultiTouch = true;
@@ -637,10 +649,10 @@ stage.addEventListener('touchmove', (e) => {
 
     if (placementMode) {
       // 配置レティクルのドラッグ移動: 縦方向=奥行き(前後)、横方向=左右。
-      // センサーに一切依存しない、既存の1本指ドラッグと同じ変換式。
+      // センサーに一切依存しない、既存の1本指ドラッグと同じ変換式だが、
+      // 距離はドラッグ開始時点で固定する(touchStart参照、遠方での暴走対策)。
       const cur = placementReticle.getWorldPosition();
-      const distance = Math.abs(cur.z - camera.position.z);
-      const worldPerPixel = (2 * Math.tan(vFovRad / 2) * distance) / rect.height;
+      const worldPerPixel = (2 * Math.tan(vFovRad / 2) * touchState.reticleDistAtStart) / rect.height;
       const newX = cur.x + dx * worldPerPixel;
       const newZ = THREE.MathUtils.clamp(
         cur.z + dy * worldPerPixel,
