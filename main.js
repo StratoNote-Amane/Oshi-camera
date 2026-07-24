@@ -279,82 +279,88 @@ function applyPlacement() {
 }
 
 /* ============================================================
-   配置レティクル(20260722平面推定指示書 Part5/6)
+   配置レティクル(20260722平面推定指示書 Part5/6 + 07/27再設計)
    ------------------------------------------------------------
-   単一の🎯ボタンで「配置モードへ入る」「今の位置に確定する」を
-   兼ねるトグル式にしている(tuneBtn等、既存のUIパターンに合わせた)。
-     1回目のタップ: 配置モードON、レティクル表示開始
-     2回目のタップ: レティクルの位置で確定し、配置モードOFF
+   【2026/07/27】カメラが常に固定姿勢になった(main.jsの方位センサー
+   セクション参照)ことで、レイキャストによる床認識が機能しなくなった
+   ため、「指でドラッグして薄い円を動かし、位置を決めたら確定ボタンを
+   押す」方式に変更した。ドラッグの変換式は、既存の1本指ドラッグ
+   (キャラクター移動)と同じ「画面上のピクセル移動量→現在の距離に
+   応じたワールド座標移動量」を使う(センサーに一切依存しない、
+   すでに実績のある安全な計算式)。
+
+   縦ドラッグ = 奥行き(Z、前後)、横ドラッグ = 左右(X)、という
+   「地図を見下ろすような」操作感にしている。
    ============================================================ */
-function confirmPlacement() {
+const placementConfirmBtn = document.getElementById('placement-confirm-btn');
+
+/** レティクルを指定のワールドXZへ、現在の仮想床の高さで表示する。 */
+function showReticleAt(x, z) {
+  placementReticle.setWorldPosition(x, groundEstimator.getGroundHeight(), z);
+  placementReticle.show();
+  placementConfirmBtn.classList.add('show');
+}
+
+/** 配置モード/初回設置モードを終える共通処理。 */
+function endPlacementMode() {
+  placementMode = false;
+  pendingInitialPlacement = false;
+  placementReticle.hide();
+  placementConfirmBtn.classList.remove('show');
+  reticleBtn.classList.remove('active');
+  uiLayer.classList.remove('placement-pending');
+  placementIntro.classList.remove('show');
+}
+
+/**
+ * レティクルの現在位置でキャラクターの配置を確定する。
+ * 初回設置(pendingInitialPlacement)・再配置(🎯ボタン経由)の
+ * どちらからも呼ばれる共通処理。
+ */
+function confirmReticlePlacement() {
   const pose = placementReticle.getPlacementPose();
-  if (!pose) {
-    showPoseToast('その場所には配置できません');
-    return;
-  }
   placement.x = pose.position.x;
   placement.y = pose.position.y;
   placement.z = pose.position.z;
   // rotationYは「初期設定値をそのまま使う」設計(placement-reticle.js参照)。
   groundEstimator.setGroundHeight(pose.position.y);
+
+  if (activeCharacter) activeCharacter.root.visible = true;
   applyPlacement();
-  placementMode = false;
-  placementReticle.hide();
-  reticleBtn.classList.remove('active');
-  showPoseToast('この場所に配置しました');
+
+  const wasInitial = pendingInitialPlacement;
+  endPlacementMode();
+  showPoseToast(wasInitial ? 'この場所に配置しました' : '位置を更新しました');
 }
+
+placementConfirmBtn.addEventListener('click', confirmReticlePlacement);
 
 reticleBtn.addEventListener('click', () => {
   if (!activeCharacter || pendingInitialPlacement) return;
   if (!placementMode) {
     placementMode = true;
     reticleBtn.classList.add('active');
-    placementReticle.show();
-    showPoseToast('画面中央を床に向けてもう一度🎯を押すと配置します');
+    showReticleAt(placement.x, placement.z);
+    showPoseToast('円をドラッグして位置を決め、「ここに配置」を押してください');
   } else {
-    confirmPlacement();
+    // 再配置モード中の2回目の🎯タップは「確定せずキャンセル」とする
+    // (確定は専用ボタンのみで行う、誤タップでの意図しない確定を防ぐ)。
+    endPlacementMode();
   }
 });
 
 /**
  * 初回設置フロー: モデル読み込み完了直後に呼ばれる。実際のARカメラアプリ
- * (Pokémon GO/IKEA Place等)の「まず床を狙ってタップで設置」という
- * 導入フローを参考にした。キャラクター・メインUIは隠したまま、
- * レティクルと案内バナーだけを表示する。
+ * (Pokémon GO/IKEA Place等)を参考に、「まず円で立つ位置を決めてから
+ * メインUIが使えるようになる」導入フローにした。キャラクター・
+ * メインUIは隠したまま、レティクルと案内バナー・確定ボタンだけを表示する。
  */
 function beginInitialPlacement() {
   pendingInitialPlacement = true;
   placementMode = true;
-  placementReticle.show();
+  showReticleAt(DEFAULT_PLACEMENT.x, DEFAULT_PLACEMENT.z);
   uiLayer.classList.add('placement-pending');
   placementIntro.classList.add('show');
-}
-
-/**
- * 初回設置の確定。画面タップ(touchendハンドラ内)から呼ばれる。
- * レティクルの位置が無効(床が見つかっていない)場合は確定せず、
- * 案内を出して待ち続ける。
- */
-function confirmInitialPlacement() {
-  const pose = placementReticle.getPlacementPose();
-  if (!pose) {
-    showPoseToast('床が見つかりません。スマホをもう少し下に向けてください');
-    return;
-  }
-  placement.x = pose.position.x;
-  placement.y = pose.position.y;
-  placement.z = pose.position.z;
-  groundEstimator.setGroundHeight(pose.position.y);
-
-  activeCharacter.root.visible = true;
-  applyPlacement();
-
-  pendingInitialPlacement = false;
-  placementMode = false;
-  placementReticle.hide();
-  uiLayer.classList.remove('placement-pending');
-  placementIntro.classList.remove('show');
-  showPoseToast('この場所に配置しました');
 }
 
 /* ============================================================
@@ -627,13 +633,29 @@ stage.addEventListener('touchmove', (e) => {
     const dx = t.clientX - touchState.lastX, dy = t.clientY - touchState.lastY;
     touchState.lastX = t.clientX; touchState.lastY = t.clientY;
     const rect = stage.getBoundingClientRect();
-    const distance = Math.abs(placement.z - camera.position.z);
     const vFovRad = THREE.MathUtils.degToRad(camera.fov);
-    const worldPerPixelY = (2 * Math.tan(vFovRad / 2) * distance) / rect.height;
-    placement.x += dx * worldPerPixelY;
-    placement.y -= dy * worldPerPixelY;
-    applyPlacement();
-  } else if (touchState.mode === 'gesture' && e.touches.length >= 2) {
+
+    if (placementMode) {
+      // 配置レティクルのドラッグ移動: 縦方向=奥行き(前後)、横方向=左右。
+      // センサーに一切依存しない、既存の1本指ドラッグと同じ変換式。
+      const cur = placementReticle.getWorldPosition();
+      const distance = Math.abs(cur.z - camera.position.z);
+      const worldPerPixel = (2 * Math.tan(vFovRad / 2) * distance) / rect.height;
+      const newX = cur.x + dx * worldPerPixel;
+      const newZ = THREE.MathUtils.clamp(
+        cur.z + dy * worldPerPixel,
+        MIN_CHARACTER_DISTANCE_Z,
+        MAX_CHARACTER_DISTANCE_Z
+      );
+      placementReticle.setWorldPosition(newX, groundEstimator.getGroundHeight(), newZ);
+    } else {
+      const distance = Math.abs(placement.z - camera.position.z);
+      const worldPerPixelY = (2 * Math.tan(vFovRad / 2) * distance) / rect.height;
+      placement.x += dx * worldPerPixelY;
+      placement.y -= dy * worldPerPixelY;
+      applyPlacement();
+    }
+  } else if (touchState.mode === 'gesture' && e.touches.length >= 2 && !placementMode) {
     const dist = touchDist(e.touches[0], e.touches[1]);
     const angle = touchAngle(e.touches[0], e.touches[1]);
     const midY = touchMidY(e.touches[0], e.touches[1]);
@@ -679,12 +701,8 @@ stage.addEventListener('touchend', (e) => {
     const t = e.changedTouches[0];
     const movedPx = Math.hypot(t.clientX - touchState.startX, t.clientY - touchState.startY);
     const elapsedMs = Date.now() - touchState.startTime;
-    if (movedPx <= TAP_MAX_MOVE_PX && elapsedMs <= TAP_MAX_DURATION_MS) {
-      if (pendingInitialPlacement) {
-        confirmInitialPlacement();
-      } else if (!placementMode) {
-        placeCharacterAtScreenPoint(t.clientX, t.clientY);
-      }
+    if (movedPx <= TAP_MAX_MOVE_PX && elapsedMs <= TAP_MAX_DURATION_MS && !placementMode) {
+      placeCharacterAtScreenPoint(t.clientX, t.clientY);
     }
   }
   if (e.touches.length === 0) touchState.mode = null;
@@ -1004,8 +1022,8 @@ function animate() {
   // にする方針へ変更した(詳細は「方位センサー」セクションのコメント参照)。
   // そのためここには何も書かない(意図的に空、将来また混乱しないように明記)。
   if (activeCharacter) activeCharacter.update(dt);
-  if (placementMode) {
-    placementReticle.update(groundEstimator.getGroundPlane(), camera, dt);
+  if (placementReticle.isVisible()) {
+    placementReticle.updatePulse(dt);
   }
   effect.render(scene, camera);
 }

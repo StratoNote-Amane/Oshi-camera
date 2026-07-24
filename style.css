@@ -94,6 +94,19 @@ html, body {
   padding: 12px 20px; border-radius: 16px;
   box-shadow: 0 6px 24px rgba(0,0,0,.4);
 }
+#placement-confirm-btn {
+  display: none;
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 110px);
+  z-index: 49;
+  appearance: none; border: none; border-radius: 999px;
+  padding: 13px 30px; font-size: 15px; font-weight: 700;
+  background: #e7b94c; color: #1a1408; cursor: pointer;
+  box-shadow: 0 6px 20px rgba(231,185,76,.4);
+  -webkit-tap-highlight-color: transparent;
+}
+#placement-confirm-btn.show { display: block; }
+#placement-confirm-btn:active { transform: translateX(-50%) scale(.95); }
 
 /* ===== 操作UI ===== */
 #ui-layer {
