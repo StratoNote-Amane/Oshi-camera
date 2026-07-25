@@ -126,7 +126,7 @@ scene.add(rim);
 // 足元の影(Contact Shadow・太陽光によるDirectional Shadow・環境連動の
 // 濃さ補正)は js/shadow/ 以下のShadowRigに委譲(ADR-014)。
 // rendererを渡すとshadowMap.enabled/typeを自動設定する。
-const shadowRig = createShadowRig(scene, { renderer, quality: 'medium' });
+const shadowRig = createShadowRig(scene, { renderer, quality: 'high' });
 
 // 環境解析(GPS/太陽位置/カメラ画像解析)・投影整合性チェック・距離較正・
 // 画面内デバッグコンソールの初期化。CONSTRAINTS.md 1節の通り、まだ
@@ -256,6 +256,20 @@ function applyPlacement() {
   // (このGPS優先化はADR-014の既知の制約と関わるため、詳細な経緯・
   //  実機確認が必要な点はOPEN_ITEMSを参照)
   let lightAzimuthDeg = environmentLighting.getEstimatedAzimuthDeg();
+
+  // 2026/07/30追加: 実機写真フィードバックにより、屋内(特にカーテン等で
+  // 直射光が無い拡散光の部屋)では、lighting.jsの画像ベース方位推定
+  // (輝度重心法)が-40°〜+28°等、セッションごとに大きく暴れることを
+  // 確認した。実在しない/信頼できない方向をそのまま影の向きに反映すると、
+  // 見るたびに違う、部屋の実際の見た目と無関係な角度で影が伸びる
+  // 「不自然な影」になってしまう。屋内は方向性の強い光源が無い拡散光
+  // という前提に立ち、画像ベースの方位推定は使わず、固定の中立値(0度=
+  // カメラから見てキャラクターの真後ろ)にする。将来、屋内でも窓際等
+  // 明確な方向性がある場合の扱いは別途検討する。
+  if (environmentState && environmentState.environmentType === 'indoor') {
+    lightAzimuthDeg = 0;
+  }
+
   if (
     environmentState &&
     environmentState.environmentType !== 'indoor' &&

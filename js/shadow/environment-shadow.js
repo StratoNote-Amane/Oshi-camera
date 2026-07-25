@@ -87,7 +87,13 @@ export function computeEnvironmentShadowParams(environmentState) {
 
   let directionalStrength;
   if (environmentType === 'indoor') {
-    directionalStrength = 0.08;
+    // 2026/07/29: 屋内をほぼ0.08(実質Contact Shadowの単純な円形のみ)に
+    // していたため、キャラクターのシルエット形状が全く影に出ず、
+    // 「影の質が低い」という実機写真フィードバックにつながっていた。
+    // 室内でも窓からの採光等でそれなりに柔らかい指向性の光はあり得る
+    // ため、完全に消さず、明るさ(averageLuminance)に応じて0.2〜0.4程度
+    // 残すようにする(晴天屋外のような硬い影にはならない範囲に留める)。
+    directionalStrength = 0.2 + Math.max(0, Math.min(1, averageLuminance)) * 0.2;
   } else if (environmentType === 'outdoor') {
     // 屋外判定でも空色が屋外らしくない場合は、GPSだけで屋外と誤判定
     // している可能性が高いとみなし、フル強度にはしない(安全弁)。
