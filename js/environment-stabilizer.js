@@ -22,8 +22,21 @@
    ============================================================ */
 
 const EMA_ALPHA = 0.25; // 新しいサンプルへ寄せる割合(小さいほど滑らか、反応は遅くなる)
-const OUTDOOR_ENTER_THRESHOLD = 65; // indoor→outdoorへ切り替わるのに必要な平滑化後outdoorScore
-const INDOOR_ENTER_THRESHOLD = 35;  // outdoor→indoorへ切り替わるのに必要な平滑化後outdoorScore
+
+// 2026/07/31 実機ログで、実際の屋外シーン(GPS良好・晴天窓際)の
+// outdoorScoreが57〜62%程度の狭い帯に収まったまま推移し、当初設定した
+// 「屋外への切替に65以上を要求する」閾値に一度も届かず、一度indoor側に
+// 確定すると永久にoutdoorへ戻れなくなる不具合を確認した。閾値を実測の
+// 分布に合わせて50の近くへ寄せ、往復に必要な差を縮める。
+const OUTDOOR_ENTER_THRESHOLD = 58; // indoor→outdoorへ切り替わるのに必要な平滑化後outdoorScore
+const INDOOR_ENTER_THRESHOLD = 42;  // outdoor→indoorへ切り替わるのに必要な平滑化後outdoorScore
+
+// さらに、閾値の設定自体が万一まだ合っていなかった場合に「一度確定したら
+// 二度と戻れない」という最悪の事態(今回の不具合そのもの)を防ぐ安全弁。
+// 生の判定(raw.environmentType)と現在の確定分類(stableType)が
+// これだけ連続して食い違い続けたら、閾値の到達を待たずに強制的に
+// raw側へ合わせる。
+const FORCE_SWITCH_AFTER_MISMATCHES = 4;
 
 const NUMBER_FIELDS = [
   'sunAltitude', 'sunAzimuth', 'averageLuminance', 'estimatedColorTemperature',
@@ -50,20 +63,43 @@ function smoothColor(prevVal, rawVal) {
 
 export function createEnvironmentStabilizer() {
   let smoothed = null;
-  let stableType = null; // ヒステリシスのために保持する「現在の確定分類」
+  let stableType = null;  // ヒステリシスのために保持する「現在の確定分類」
+  let mismatchStreak = 0; // rawとstableTypeが連続して食い違っているサンプル数
 
   function resolveEnvironmentType(smoothedOutdoorScore, rawType) {
-    if (typeof smoothedOutdoorScore !== 'number') return rawType;
     if (stableType == null) {
-      stableType = smoothedOutdoorScore >= 50 ? 'outdoor' : 'indoor';
+      stableType = typeof smoothedOutdoorScore === 'number'
+        ? (smoothedOutdoorScore >= 50 ? 'outdoor' : 'indoor')
+        : (rawType || 'ambiguous');
+      mismatchStreak = 0;
       return stableType;
     }
-    if (stableType === 'indoor' && smoothedOutdoorScore >= OUTDOOR_ENTER_THRESHOLD) {
-      stableType = 'outdoor';
-    } else if (stableType === 'outdoor' && smoothedOutdoorScore <= INDOOR_ENTER_THRESHOLD) {
-      stableType = 'indoor';
+
+    if (typeof smoothedOutdoorScore === 'number') {
+      if (stableType === 'indoor' && smoothedOutdoorScore >= OUTDOOR_ENTER_THRESHOLD) {
+        stableType = 'outdoor';
+        mismatchStreak = 0;
+        return stableType;
+      }
+      if (stableType === 'outdoor' && smoothedOutdoorScore <= INDOOR_ENTER_THRESHOLD) {
+        stableType = 'indoor';
+        mismatchStreak = 0;
+        return stableType;
+      }
     }
-    // しきい値の間(ambiguous寄り)にいる間は、前回確定した分類を維持する。
+
+    // 安全弁: 閾値にはまだ届いていなくても、生の判定と何サンプルも
+    // 食い違い続けている場合は、閾値設定のミスで永久に固定される事故を
+    // 防ぐため強制的にraw側へ合わせる(2026/07/31の不具合対応)。
+    if (rawType && rawType !== stableType) {
+      mismatchStreak += 1;
+      if (mismatchStreak >= FORCE_SWITCH_AFTER_MISMATCHES) {
+        stableType = rawType;
+        mismatchStreak = 0;
+      }
+    } else {
+      mismatchStreak = 0;
+    }
     return stableType;
   }
 

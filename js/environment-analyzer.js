@@ -207,11 +207,22 @@ function scoreEnvironment({ imageAnalysis, gps, sun }) {
   }
 
   if (gps) {
-    if (gps.accuracy != null && gps.accuracy <= 20) outdoor += 15;
-    else if (gps.accuracy != null && gps.accuracy > 50) indoor += 15;
+    // 2026/08/02修正: 従来はGPS精度良好で一律+15していたが、実機ログで
+    // 「画像根拠は屋内25:屋外25の同点(本来ambiguousが妥当)なのに、
+    // GPS精度良好の+15だけで屋外61.5%まで一気に傾く」事例を確認した。
+    // GPSが取れること自体は、窓際・上層階等では室内でもよく起こり、
+    // 屋内/屋外の判別材料としての信頼性は画像根拠(空色・輝度差・
+    // 太陽高度整合・色温度、合計最大60点相当)より本質的に低い。
+    // GPS成功時の加点を弱め、画像根拠が拮抗している時にGPSだけで
+    // 屋外側へ倒れきってしまわないようにする(あくまで補助的な
+    // タイブレーカーに留める)。精度不良(>50m、電波状況の悪さの
+    // 目安)は逆に屋内の根拠としてはある程度信頼できるため、
+    // こちらは従来の重みに近い値を維持する。
+    if (gps.accuracy != null && gps.accuracy <= 20) outdoor += 5;
+    else if (gps.accuracy != null && gps.accuracy > 50) indoor += 10;
   } else {
     // GPSが一定時間内に取得できない(屋内で電波が届きにくい)ことが多い
-    indoor += 15;
+    indoor += 10;
   }
 
   const total = outdoor + indoor;

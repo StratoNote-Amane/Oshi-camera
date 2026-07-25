@@ -257,29 +257,31 @@ function applyPlacement() {
   //  実機確認が必要な点はOPEN_ITEMSを参照)
   let lightAzimuthDeg = environmentLighting.getEstimatedAzimuthDeg();
 
-  // 2026/07/30追加: 実機写真フィードバックにより、屋内(特にカーテン等で
-  // 直射光が無い拡散光の部屋)では、lighting.jsの画像ベース方位推定
-  // (輝度重心法)が-40°〜+28°等、セッションごとに大きく暴れることを
-  // 確認した。実在しない/信頼できない方向をそのまま影の向きに反映すると、
-  // 見るたびに違う、部屋の実際の見た目と無関係な角度で影が伸びる
-  // 「不自然な影」になってしまう。屋内は方向性の強い光源が無い拡散光
-  // という前提に立ち、画像ベースの方位推定は使わず、固定の中立値(0度=
-  // カメラから見てキャラクターの真後ろ)にする。将来、屋内でも窓際等
-  // 明確な方向性がある場合の扱いは別途検討する。
-  if (environmentState && environmentState.environmentType === 'indoor') {
+  // 2026/08/01改訂: 当初は`environmentType === 'indoor'`かどうかで
+  // 方位を固定するかを判定していたが、「GPSが取れただけでoutdoorScoreが
+  // 押し上げられ、実際は方向性の無い拡散光の部屋なのにenvironmentType
+  // ='outdoor'になる」ケース(indoor/outdoor判定自体がまだGPS成功に
+  // 引っ張られやすいバイアスを持つ)が実機ログで確認された。
+  // indoor/outdoorというラベルではなく、実際の空色が「屋外の光らしいか」
+  // (影の強さの判定で使っているlooksLikeOutdoorSkyと同じ基準)で
+  // 判定するように統一する。こうすることで、GPSの成否やラベルの
+  // 誤判定に振り回されず、「本当に方向性のある光を裏付ける材料が
+  // あるかどうか」だけで方位を固定するか判断できる。
+  const hasPlausibleLightDirection = environmentState && looksLikeOutdoorSky(environmentState.skyColor);
+  if (environmentState && !hasPlausibleLightDirection) {
+    // 方向性の強い光源を裏付ける材料が無い(拡散光と推定される)場合は、
+    // lighting.jsの画像ベース推定(セッションごとに大きく暴れることを
+    // 確認済み)を使わず、固定の中立値(0度=カメラから見てキャラクターの
+    // 真後ろ)にする。
     lightAzimuthDeg = 0;
   }
 
   if (
     environmentState &&
-    environmentState.environmentType !== 'indoor' &&
+    hasPlausibleLightDirection &&
     environmentState.gpsAccuracy != null && environmentState.gpsAccuracy <= 20 &&
     environmentState.sunAzimuth != null &&
-    compassCalibration.isAvailable() &&
-    // 2026/07/28追加: GPSが良好でも、空色が屋外らしくない(室内照明の
-    // 暖色等)場合はGPS方位を信用しない。実機で「室内窓際でGPSは良好、
-    // しかしenvironmentType='outdoor'に誤判定される」事例を確認したため。
-    looksLikeOutdoorSky(environmentState.skyColor)
+    compassCalibration.isAvailable()
   ) {
     const calibratedAzimuth = compassCalibration.toARRelativeAzimuth(environmentState.sunAzimuth);
     if (calibratedAzimuth != null) lightAzimuthDeg = calibratedAzimuth;
