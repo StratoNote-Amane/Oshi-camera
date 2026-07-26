@@ -6,13 +6,13 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="OshiCamera">
-<meta name="theme-color" content="#05060a">
+<meta name="theme-color" content="#06060a">
 <title>推しカメラ (prototype)</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<!-- キャラクター選択画面（現状1体だが、今後複数体を追加した時に自動でカード一覧になる） -->
+<!-- キャラクター選択画面 -->
 <div id="select-screen">
   <div class="select-card">
     <h1>推しカメラ</h1>
@@ -21,17 +21,17 @@
   </div>
 </div>
 
-<!-- カメラ・ジャイロ許可前のスタート画面 -->
+<!-- スタート画面 -->
 <div id="start-screen">
   <div class="start-card">
     <h1>準備OK</h1>
-    <p>カメラと「向きの検知(ジャイロ)」への<br>アクセスを許可してください。<br>ジャイロを許可すると、スマホを動かしても推しがその場に立っているように見えます。</p>
-    <button id="start-btn">カメラを起動する</button>
+    <p>カメラと「向きの検知(ジャイロ)」への<br>アクセスを許可してください。</p>
+    <button id="start-btn">はじめる</button>
     <p class="start-note" id="start-error"></p>
   </div>
 </div>
 
-<!-- 撮影ステージ：video と three.js canvas を同じ矩形に重ねる -->
+<!-- 撮影ステージ -->
 <div id="stage-wrap">
   <div id="stage">
     <video id="camera-video" autoplay playsinline muted></video>
@@ -41,8 +41,7 @@
 <div id="flash-overlay"></div>
 <div id="countdown-overlay"><span id="countdown-num"></span></div>
 
-<!-- 初回設置ステップ：実際のARカメラアプリを参考に、起動直後は
-     まずレティクルで床を狙ってタップで設置してもらう案内 -->
+<!-- 初回設置ステップ -->
 <div id="placement-intro">
   <div id="placement-intro-text">円をドラッグして立つ位置を決めてください<br>決まったら「ここに配置」を押してください</div>
 </div>
@@ -52,29 +51,41 @@
 <div id="ui-layer">
   <div id="top-controls">
     <div id="top-bar">
-      <div class="top-bar-left">
-        <button id="switch-cam-btn" class="icon-btn" title="カメラ切替">⟳</button>
-        <button id="reticle-btn" class="icon-btn" title="配置/再配置">🎯</button>
-        <button id="shadow-adjust-btn" class="icon-btn" title="影の向き・長さ調整">🌗</button>
-        <button id="timer-btn" class="icon-btn" title="セルフタイマー">⏱</button>
-      </div>
+      <!-- 常時見えるのはこの1個だけ。他は全てここから展開する -->
       <div class="top-bar-right">
-        <button id="mode-btn" class="mode-chip" title="写真/動画 切替">📷 写真</button>
-        <button id="reset-btn" class="icon-btn" title="位置と向きの基準をリセット">⟲</button>
+        <button id="dock-toggle" aria-label="メニュー">⋯</button>
       </div>
     </div>
-    <!-- アングル(フレーミング)切替：キャラクターの配置ではなくカメラ側を動かすので、
-         数値が多少ズレていても他の操作(ドラッグ配置など)と干渉しない -->
-    <div id="framing-bar"></div>
   </div>
 
-  <!-- ポーズ/表情セレクター：シャッターを中心とした分割リングに統合済み
-       (経緯はjs/pose-ring.jsコメント参照) -->
-  <button id="cat-chip"><span id="cat-label">ポーズ</span><span class="chev">▸</span></button>
-  <div id="ring-label"></div>
-  <svg id="ring-svg" width="156" height="156" viewBox="0 0 156 156"></svg>
+  <!-- 折りたたみドック：タップで展開。既存の全機能ボタンをここに集約する -->
+  <div id="top-dock">
+    <div id="framing-bar"></div>
+    <div class="dock-row">
+      <button id="switch-cam-btn" class="icon-btn" title="カメラ切替">⟳</button>
+      <button id="reticle-btn" class="icon-btn" title="配置/再配置">◎</button>
+      <button id="shadow-adjust-btn" class="icon-btn" title="影の向き・長さ調整">◐</button>
+      <button id="timer-btn" class="icon-btn" title="セルフタイマー">⏱</button>
+    </div>
+    <div class="dock-row">
+      <button id="mode-btn" class="mode-chip" title="写真/動画 切替">写真</button>
+      <button id="reset-btn" class="icon-btn" title="位置と向きの基準をリセット">⟲</button>
+    </div>
+  </div>
 
   <div id="bottom-controls">
+    <!-- ポーズ/表情：カプセル1つに統合。矢印タップ、またはカプセルを
+         左右にスワイプして切り替える(js/pose-ring.js、同一の公開APIを維持) -->
+    <div id="ring-label"></div>
+    <div id="ring-svg">
+      <button id="cat-chip"><span id="cat-label">ポーズ</span></button>
+      <button class="dock-arrow" id="dock-prev" aria-label="前へ">‹</button>
+      <div class="dock-current" id="dock-current">
+        <span class="dock-emoji" id="dock-emoji">🧍</span>
+      </div>
+      <button class="dock-arrow" id="dock-next" aria-label="次へ">›</button>
+    </div>
+
     <div id="bottom-bar">
       <div id="shutter-status"></div>
       <div id="capture-row">
@@ -90,17 +101,14 @@
     <img id="result-img" alt="撮影結果">
     <video id="result-video" playsinline controls loop></video>
   </div>
-  <p class="result-hint" id="result-hint">画像を長押しして「写真に保存」してください</p>
+  <p class="result-hint" id="result-hint">下にスワイプ、または「もう一度撮る」で撮り直せます</p>
   <div id="result-actions">
     <button id="share-btn">保存・共有する</button>
     <button id="retake-btn">もう一度撮る</button>
   </div>
 </div>
 
-<!-- 影の向き・長さ 手動調整パネル(20260726追加、js/shadow-controls-ui.js)
-     自動推定がおかしな影を作った時の保険。既定は常に「自動」で、
-     手動トグルをオンにするまでオーバーライドは有効化されない。
-     影自体の表示ON/OFFは意図的に持たせていない(hinya指示)。 -->
+<!-- 影の向き・長さ 手動調整パネル -->
 <div id="shadow-panel">
   <div class="shadow-panel-handle"></div>
   <div class="pose-panel-head">
@@ -143,6 +151,7 @@
 }
 </script>
 <script src="js/pose-ring.js"></script>
+<script src="js/ui-gestures.js"></script>
 <script type="module" src="main.js"></script>
 </body>
 </html>
