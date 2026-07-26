@@ -57,6 +57,27 @@ export function createDirectionalShadow(scene, quality) {
   let lastUpdateTime = 0;
   let enabled = true;
 
+  /* ----------------------------------------------------------
+     手動オーバーライド(20260726影向き/長さ調整オプション)
+     --------------------------------------------------------
+     撮影時に自動推定(GPS太陽方位/輝度重心法/EnvironmentAnalyzer)が
+     おかしな影を作ってしまった場合の「保険」として、方位(azimuth)と
+     太陽高度(altitude、影の長さを支配する)を手動値で上書きできる
+     ようにする。既定はnull(=自動)で、update()の呼び出し側の挙動は
+     一切変えない。
+
+     「長さ」を独立パラメータとして新設せず、既存の太陽高度ベースの
+     計算(tanによる伸縮)をそのまま流用する設計にしている理由:
+     ShadowMapは実際の投影計算で影の長さが決まるため、高度と無関係な
+     独自の「伸縮倍率」を追加すると、位置計算(light.position)と
+     フラスタムサイズ(frustumHalf)の整合が崩れやすく、
+     「バグに困っている状況で新しいバグを増やす」リスクがある。
+     既存の実績あるロジックを再利用することで、新規に導入する
+     数式を最小限にとどめている。
+     --------------------------------------------------------- */
+  let manualAzimuthDeg = null;  // nullなら自動(lightAzimuthDeg引数を使用)
+  let manualAltitudeDeg = null; // nullなら自動(sunAltitudeDeg引数を使用)、4〜88度
+
   function applyQuality(l, q) {
     l.shadow.mapSize.set(q.mapSize, q.mapSize);
     l.shadow.radius = q.radius;
@@ -85,9 +106,17 @@ export function createDirectionalShadow(scene, quality) {
     light.castShadow = enabled;
     if (!enabled) return;
 
-    const altitudeDeg = THREE.MathUtils.clamp(sunAltitudeDeg == null ? 45 : sunAltitudeDeg, 4, 88);
+    // 手動オーバーライドが設定されていればそちらを優先する。
+    const effectiveAltitudeDeg = manualAltitudeDeg != null
+      ? manualAltitudeDeg
+      : (sunAltitudeDeg == null ? 45 : sunAltitudeDeg);
+    const effectiveAzimuthDeg = manualAzimuthDeg != null
+      ? manualAzimuthDeg
+      : (lightAzimuthDeg || 0);
+
+    const altitudeDeg = THREE.MathUtils.clamp(effectiveAltitudeDeg, 4, 88);
     const altitudeRad = THREE.MathUtils.degToRad(altitudeDeg);
-    const azimuthRad = THREE.MathUtils.degToRad(lightAzimuthDeg || 0);
+    const azimuthRad = THREE.MathUtils.degToRad(effectiveAzimuthDeg);
 
     // 光源は「十分遠い」距離に置くことで、ほぼ平行光線(太陽光)として扱う。
     // Three.jsのDirectionalLightは元々平行光源だが、shadow.cameraの
@@ -129,11 +158,41 @@ export function createDirectionalShadow(scene, quality) {
     applyQuality(light, q);
   }
 
+  /**
+   * 影の向き(方位角)を手動で固定する。nullを渡すと自動推定に戻る。
+   * @param {number|null} deg -180〜180度。値域外は自動的にクランプする。
+   */
+  function setManualAzimuthDeg(deg) {
+    manualAzimuthDeg = deg == null ? null : THREE.MathUtils.clamp(deg, -180, 180);
+  }
+
+  /**
+   * 太陽高度を手動で固定する(=影の長さを手動で固定する)。
+   * 高度が低いほど影は長く伸び、高いほど短くなる(実際の投影計算による)。
+   * nullを渡すと自動推定(EnvironmentAnalyzerのsunAltitude)に戻る。
+   * @param {number|null} deg 4〜88度。値域外は自動的にクランプする。
+   */
+  function setManualAltitudeDeg(deg) {
+    manualAltitudeDeg = deg == null ? null : THREE.MathUtils.clamp(deg, 4, 88);
+  }
+
+  function getManualState() {
+    return { azimuthDeg: manualAzimuthDeg, altitudeDeg: manualAltitudeDeg };
+  }
+
+  function resetManual() {
+    manualAzimuthDeg = null;
+    manualAltitudeDeg = null;
+  }
+
   function dispose() {
     scene.remove(light);
     scene.remove(target);
     light.shadow.dispose();
   }
 
-  return { light, target, update, setQuality, dispose, isEnabled: () => enabled };
+  return {
+    light, target, update, setQuality, dispose, isEnabled: () => enabled,
+    setManualAzimuthDeg, setManualAltitudeDeg, getManualState, resetManual,
+  };
 }

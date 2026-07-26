@@ -328,6 +328,43 @@ html, body {
 }
 #pose-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* ===== 影の向き・長さ 手動調整パネル(20260726追加) =====
+   #pose-panelは既に廃止済みだが、下部シートの見た目は踏襲する。
+   コンテナ自体は新設し、中身の行/ラベル/スライダー/アクション/
+   ヒントは共有クラス(.pose-panel-*, .slider-row)をそのまま流用する。 */
+#shadow-panel {
+  display: none;
+  position: fixed; left: 12px; right: 12px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  z-index: 250;
+  background: rgba(14,16,22,.94);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 16px;
+  padding: 14px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  max-height: 70vh; overflow-y: auto;
+}
+#shadow-panel.show { display: block; }
+.shadow-panel-handle {
+  width: 36px; height: 4px; border-radius: 2px;
+  background: rgba(255,255,255,.25);
+  margin: 0 auto 10px;
+}
+/* 「向き」「長さ」「調整」は2文字なので、汎用の.pose-panel-row labelより
+   少し幅を広げる(既存の.pose-panel-row自体の18pxは変更せず、
+   このパネル内だけ上書きする) */
+#shadow-panel .pose-panel-row label { width: 34px; }
+.shadow-toggle-btn {
+  margin-left: auto;
+  padding: 6px 14px; border-radius: 999px;
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.2);
+  color: #fff; font-size: 12px; font-family: inherit; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.shadow-toggle-btn.on { background: rgba(231,185,76,.28); border-color: #e7b94c; color: #fff5da; }
+.shadow-toggle-btn:active { transform: scale(.95); }
+#shadow-panel input[type="range"]:disabled { opacity: .35; }
+
 /* ===== ポーズ調整パネル 共有クラス =====
    注意: スマホ版(main.js/index.html)自体はポーズ調整パネルのモジュールを
    廃止したため#pose-panel(ID)は使わないが、以下のクラス群はdev.html

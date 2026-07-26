@@ -3,6 +3,7 @@ import { MMDLoader } from 'three/addons/loaders/MMDLoader.js';
 import { OutlineEffect } from 'three/addons/effects/OutlineEffect.js';
 import { createEnvironmentLighting } from './js/lighting.js';
 import { createShadowRig } from './js/shadow/shadow-rig.js';
+import { initShadowControlsUI } from './js/shadow-controls-ui.js';
 import { applyPhotoFinish } from './js/postfx.js';
 import { applyAtmosphericPerspective } from './js/atmosphere.js';
 import { CHARACTERS } from './js/characters-data.js';
@@ -127,6 +128,11 @@ scene.add(rim);
 // 濃さ補正)は js/shadow/ 以下のShadowRigに委譲(ADR-014)。
 // rendererを渡すとshadowMap.enabled/typeを自動設定する。
 const shadowRig = createShadowRig(scene, { renderer, quality: 'high' });
+
+// 影の向き・長さ 手動調整パネル(20260726追加)。自動推定が撮影時に
+// 破綻した場合の保険。UIロジックはjs/shadow-controls-ui.jsに分離し、
+// main.js側は生成のみを行う(CONSTRAINTS.md モジュール分割ルール)。
+initShadowControlsUI(shadowRig);
 
 // 環境解析(GPS/太陽位置/カメラ画像解析)・投影整合性チェック・距離較正・
 // 画面内デバッグコンソールの初期化。CONSTRAINTS.md 1節の通り、まだ

@@ -55,6 +55,7 @@
       <div class="top-bar-left">
         <button id="switch-cam-btn" class="icon-btn" title="カメラ切替">⟳</button>
         <button id="reticle-btn" class="icon-btn" title="配置/再配置">🎯</button>
+        <button id="shadow-adjust-btn" class="icon-btn" title="影の向き・長さ調整">🌗</button>
         <button id="timer-btn" class="icon-btn" title="セルフタイマー">⏱</button>
       </div>
       <div class="top-bar-right">
@@ -94,6 +95,36 @@
     <button id="share-btn">保存・共有する</button>
     <button id="retake-btn">もう一度撮る</button>
   </div>
+</div>
+
+<!-- 影の向き・長さ 手動調整パネル(20260726追加、js/shadow-controls-ui.js)
+     自動推定がおかしな影を作った時の保険。既定は常に「自動」で、
+     手動トグルをオンにするまでオーバーライドは有効化されない。
+     影自体の表示ON/OFFは意図的に持たせていない(hinya指示)。 -->
+<div id="shadow-panel">
+  <div class="shadow-panel-handle"></div>
+  <div class="pose-panel-head">
+    <span>影の向き・長さ</span>
+    <button id="shadow-panel-close" class="icon-btn small">✕</button>
+  </div>
+  <div class="pose-panel-row">
+    <label>調整</label>
+    <button id="shadow-manual-toggle" class="shadow-toggle-btn">オフ(自動)</button>
+  </div>
+  <div class="pose-panel-row slider-row">
+    <label>向き</label>
+    <input type="range" id="shadow-azimuth-slider" min="-180" max="180" step="1" value="0" disabled>
+    <span id="shadow-azimuth-val">0°</span>
+  </div>
+  <div class="pose-panel-row slider-row">
+    <label>長さ</label>
+    <input type="range" id="shadow-length-slider" min="0" max="100" step="1" value="50" disabled>
+    <span id="shadow-length-val">50</span>
+  </div>
+  <div class="pose-panel-actions">
+    <button id="shadow-reset-btn">自動に戻す</button>
+  </div>
+  <p class="pose-panel-hint">通常は環境認識による自動調整です。撮影時に影の向き・長さが不自然な場合のみ、上の「調整」をオンにして手動で直してください。</p>
 </div>
 
 <div id="pose-toast"></div>

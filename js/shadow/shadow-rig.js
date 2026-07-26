@@ -133,6 +133,67 @@ export function createShadowRig(scene, options = {}) {
     return qualityName;
   }
 
+  /* ----------------------------------------------------------
+     影の向き・長さの手動調整(20260726、撮影時の保険用オプション)
+     --------------------------------------------------------
+     自動推定(GPS太陽方位/輝度重心法/EnvironmentAnalyzer)がおかしな
+     影になった場合に備え、Directional Shadowの向き(azimuth)と
+     長さ(太陽高度ベース)を手動で上書きできるようにする窓口。
+     実際の計算・状態はdirectional-shadow.js側に閉じ、ここは
+     UI向けの単位変換(「長さ0〜100」⇔「太陽高度4〜88度」)だけを担う。
+     --------------------------------------------------------- */
+
+  // 太陽高度の可動域(directional-shadow.jsのclamp範囲と一致させる)。
+  // ここだけ数値がズレると「長さ」の見た目と実際の影がズレるため、
+  // 変更する場合はdirectional-shadow.js側のclamp範囲も必ず揃えること。
+  const MANUAL_ALTITUDE_MIN_DEG = 4;  // 影が最も長く伸びる側
+  const MANUAL_ALTITUDE_MAX_DEG = 88; // 影が最も短くなる側(ほぼ真上)
+
+  /**
+   * 影の向きを手動固定する。
+   * @param {number|null} deg -180〜180度。nullで自動推定に戻す。
+   */
+  function setShadowDirection(deg) {
+    directional.setManualAzimuthDeg(deg);
+  }
+
+  /**
+   * 影の長さを手動固定する。UI側は「0(短い)〜100(長い)」という
+   * 直感的な値を扱い、内部では太陽高度(度)へ変換する
+   * (高度が低いほど影は長く伸びるという実際の物理に合わせるため、
+   *  変換は反比例のマッピングになる)。
+   * @param {number|null} lengthPercent 0〜100。nullで自動推定に戻す。
+   */
+  function setShadowLength(lengthPercent) {
+    if (lengthPercent == null) {
+      directional.setManualAltitudeDeg(null);
+      return;
+    }
+    const p = THREE.MathUtils.clamp(lengthPercent, 0, 100);
+    const altitudeDeg = THREE.MathUtils.lerp(MANUAL_ALTITUDE_MAX_DEG, MANUAL_ALTITUDE_MIN_DEG, p / 100);
+    directional.setManualAltitudeDeg(altitudeDeg);
+  }
+
+  /**
+   * 現在の手動オーバーライド状態をUI表示用に返す。
+   * @returns {{azimuthDeg:number|null, lengthPercent:number|null}}
+   */
+  function getShadowManualState() {
+    const s = directional.getManualState();
+    const lengthPercent = s.altitudeDeg == null
+      ? null
+      : Math.round(THREE.MathUtils.clamp(
+          THREE.MathUtils.mapLinear(s.altitudeDeg, MANUAL_ALTITUDE_MAX_DEG, MANUAL_ALTITUDE_MIN_DEG, 0, 100),
+          0, 100
+        ));
+    return { azimuthDeg: s.azimuthDeg, lengthPercent };
+  }
+
+  /** 影の向き・長さの手動オーバーライドを両方とも解除し、自動推定へ戻す。 */
+  function resetShadowManualOverride() {
+    directional.resetManual();
+  }
+
   /**
    * Shadow Debug Modeの切り替え。GUIから呼ぶ想定(index.htmlに
    * デバッグボタンを追加し、main.js側でこの関数を紐付ける)。
@@ -175,6 +236,10 @@ export function createShadowRig(scene, options = {}) {
     update,
     setQuality,
     getQuality,
+    setShadowDirection,
+    setShadowLength,
+    getShadowManualState,
+    resetShadowManualOverride,
     setDebugEnabled,
     getDebugInfo,
     registerReceiver,
