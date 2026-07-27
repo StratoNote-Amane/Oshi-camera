@@ -147,7 +147,8 @@ const diagnostics = initDiagnostics({
 
 // 環境光推定(平均色/輝度/簡易光源方向/露出)は js/lighting.js に委譲。
 // getEnvironmentStateを渡すことで、EnvironmentAnalyzerのaverageLuminance/
-// skyColor/groundColorを既存の画像ベース推定へ弱くブレンドする(js/lighting.js参照)。
+// skyColor/groundColor/estimatedColorTemperatureを既存の画像ベース推定へ
+// 弱くブレンドする(js/lighting.js参照)。
 const environmentLighting = createEnvironmentLighting({
   video, hemi, dir, rim, renderer,
   baseIntensities: { hemi: BASE_HEMI_INTENSITY, dir: BASE_DIR_INTENSITY, rim: BASE_RIM_INTENSITY },
@@ -157,8 +158,9 @@ const environmentLighting = createEnvironmentLighting({
 
 // コンパス較正(ADR-014の既知の制約への対応、ROADMAP.md「太陽方位角の
 // コンパス較正」)。iOS SafariのwebkitCompassHeadingを使い、
-// EnvironmentAnalyzerのsunAzimuth(地理方位)をこのアプリのAR空間内での
-// 相対角へ変換する。詳細はjs/compass-calibration.js冒頭コメント参照。
+// EnvironmentAnalyzerのsunAzimuth(地理方位、GPS未取得時は既定緯度+
+// 端末時刻による概算)をこのアプリのAR空間内での相対角へ変換する。
+// 詳細はjs/compass-calibration.js冒頭コメント参照。
 const compassCalibration = createCompassCalibration();
 
 // 20260722平面推定指示書 Part1: 固定高さの仮想床。
@@ -257,10 +259,8 @@ function applyPlacement() {
   const environmentState = diagnostics.getEnvironmentState();
 
   // 20260722影修正指示書 Part1 + コンパス較正:
-  // 屋外・GPS精度良好・コンパス較正済みの場合は地理方位ベースのAR相対角を
-  // 優先し、それ以外は従来通りlighting.jsの画像ベース推定を使う。
-  // (このGPS優先化はADR-014の既知の制約と関わるため、詳細な経緯・
-  //  実機確認が必要な点はOPEN_ITEMSを参照)
+  // 屋外・コンパス較正済みの場合は地理方位ベースのAR相対角を優先し、
+  // それ以外は従来通りlighting.jsの画像ベース推定を使う。
   let lightAzimuthDeg = environmentLighting.getEstimatedAzimuthDeg();
 
   // 2026/08/01改訂: 当初は`environmentType === 'indoor'`かどうかで
@@ -274,18 +274,28 @@ function applyPlacement() {
   // 誤判定に振り回されず、「本当に方向性のある光を裏付ける材料が
   // あるかどうか」だけで方位を固定するか判断できる。
   const hasPlausibleLightDirection = environmentState && looksLikeOutdoorSky(environmentState.skyColor);
-  if (environmentState && !hasPlausibleLightDirection) {
-    // 方向性の強い光源を裏付ける材料が無い(拡散光と推定される)場合は、
-    // lighting.jsの画像ベース推定(セッションごとに大きく暴れることを
-    // 確認済み)を使わず、固定の中立値(0度=カメラから見てキャラクターの
-    // 真後ろ)にする。
-    lightAzimuthDeg = 0;
-  }
 
-  if (
+  // 2026/08修正(ADR-015案): 「影が常に真後ろに伸びる」という報告への対応。
+  // 従来はここで`environmentState.gpsAccuracy != null && gpsAccuracy <= 20`を
+  // 必須条件にしていたため、GPS許可が下りない実機(GPS許可ダイアログが
+  // 表示されない不具合を含む)では、この分岐に一度も到達できず、
+  // 常に画像ベースの弱い推定(実質ほぼ0度=真後ろ)に落ち続けていた。
+  //
+  // js/environment-analyzer.js側で、GPS未取得時は既定緯度(東京)+
+  // 端末のローカル時刻から「概算」の太陽方位を常に計算するように
+  // 変更した(environmentState.sunPositionIsRoughで判別可能)ため、
+  // ここではGPS精度の必須チェックを撤廃し、コンパス
+  // (webkitCompassHeading、compassCalibration.isAvailable())さえ
+  // 取得できていれば、この較正済み方位を使うようにする。
+  // GPSが実際に取得できている場合は、environment-analyzer.js側で
+  // 自動的により正確な値に切り替わるため、ここでの扱いは変わらない。
+  if (environmentState && !hasPlausibleLightDirection) {
+    // 拡散光・屋内らしい場合は、方向性のある光を裏付ける材料が無いため
+    // 中立値(0度)のまま(この判断基準は変更していない)。
+    lightAzimuthDeg = 0;
+  } else if (
     environmentState &&
     hasPlausibleLightDirection &&
-    environmentState.gpsAccuracy != null && environmentState.gpsAccuracy <= 20 &&
     environmentState.sunAzimuth != null &&
     compassCalibration.isAvailable()
   ) {
@@ -1089,6 +1099,21 @@ initCharacterSelect();
 
 startBtn.addEventListener('click', async () => {
   startError.textContent = '';
+  // 2026/08追記(ADR-015案): GPS許可ダイアログが表示されない不具合の
+  // 調査により、この後に続くオリエンテーション/モーション許可ダイアログ
+  // (各々ネイティブUIを介してユーザー操作を消費する)を経由した後だと、
+  // iOS Safariの「ユーザー操作起因」の判定が失われ、Geolocationの
+  // 許可ダイアログ自体が出ないケースがあることが分かった。
+  // diagnostics.start()(内部でEnvironmentAnalyzerのGPS要求を行う)を、
+  // 他の許可ダイアログより前、クリックハンドラの最初の行で呼ぶことで
+  // 改善を試みる。
+  // 【既知の限界・実機確認が必須】ホーム画面に追加したスタンドアロン
+  // PWAとして起動している場合、これとは別のAppleプラットフォーム側の
+  // 既知の制限(権限プロンプト自体が出ない)がある可能性があり、その
+  // ケースはこの並び替えだけでは解決しない(アプリ側での回避策なし)。
+  // 通常のSafariタブでの起動か、ホーム画面インストール済みかで
+  // 結果が変わりうるため、両方のケースでの実機確認をお願いしたい。
+  diagnostics.start();
   try {
     const orientationOK = await requestOrientationPermission();
     if (orientationOK) enableOrientationSensing();
@@ -1098,7 +1123,6 @@ startBtn.addEventListener('click', async () => {
     startScreen.style.display = 'none';
     loadCharacter(CHARACTERS[currentCharacterIndex]);
     environmentLighting.start();
-    diagnostics.start();
   } catch (err) {
     // エラーメッセージは startCamera 内で表示済み
   }

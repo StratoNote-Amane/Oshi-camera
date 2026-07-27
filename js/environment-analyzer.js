@@ -1,5 +1,5 @@
 /* ============================================================
-   environment-analyzer.js — 環境情報の一元推定モジュール(新規)
+   environment-analyzer.js — 環境情報の一元推定モジュール
    ------------------------------------------------------------
    【スコープについての重要な注記】
    指示書は天候(降水/雲量/気温)取得も要求しているが、これは
@@ -17,6 +17,29 @@
    ドラフト/検証用として位置づけ、正式採用にはCONSTRAINTS.mdの
    該当節の更新が必要(VISION_REALISM.mdの「AIによる環境認識」節に
    既に合意された方向性はあるが、格上げの正式承認はまだ得ていない)。
+
+   【2026/08 追記: GPS未取得時の太陽位置フォールバック(ADR-015案)】
+   実機で「GPS許可ダイアログ自体が表示されない」事象が確認された
+   (main.js側の許可要求の順序に起因する可能性が高い。別途main.js側
+   でも対応済み)。GPSが恒久的に使えない実機がある前提に立ち、
+   位置情報の許可なしに動作する「大まかな」太陽位置フォールバックを
+   追加する。
+
+   - 緯度: 既定値としてFALLBACK_LATITUDE_DEG(東京、北緯35.68度)を
+     使う。本プロジェクトの想定利用地域が日本であるための暫定値。
+     GPSが取得できた場合は自動的にそちらを優先する。
+   - 経度: 端末のタイムゾーンから逆算した「標準経度」をそのまま使う
+     (estimateSolarHour()に経度としてnullを渡すと、経度による時差
+     補正を0とみなす)。日本の場合はJST(UTC+9)の標準経度である
+     東経135度を暗黙的に使うのとほぼ同義になり、実際の経度との
+     ズレは日本国内であれば太陽時にして最大でも1時間弱に収まる。
+   - この結果、位置情報の許可を一切要求せず、「端末のローカル時刻」
+     だけから太陽の高度・方位を概算できる。GPSが使える環境では、
+     取得できた時点で自動的により正確な値へ切り替わる。
+   - state.sunPositionIsRough で「今の太陽位置がGPS由来(false)か
+     既定値によるフォールバック(true)か」を判別できるようにした。
+     下流(shadow-rig.js等)は特に区別せず使ってよいが、デバッグ表示や
+     将来の精度改善の判断材料として残す。
 
    【取得する情報】
    - GPS(緯度/経度/高度/精度): navigator.geolocation。追加コストなし。
@@ -41,6 +64,11 @@ const IMAGE_SAMPLE_W = 16;
 const IMAGE_SAMPLE_H = 12;
 const DEFAULT_IMAGE_INTERVAL_MS = 500;
 const DEFAULT_GPS_INTERVAL_MS = 45000;
+
+// GPS未取得時の太陽位置フォールバックに使う既定緯度(東京、北緯35.68度)。
+// 本プロジェクトの主な利用地域が日本であることを前提にした暫定値。
+// GPSが取得できた場合は常にそちらを優先し、この値は使われなくなる。
+const FALLBACK_LATITUDE_DEG = 35.68;
 
 /* ------------------------------------------------------------
    太陽位置(NOAA近似)。dev-environment.jsのgetSunPosition()と
@@ -89,12 +117,16 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
  * 均時差(年間±15分程度のズレ)は無視する簡略化(dev-environment.jsと
  * 同水準の精度)。タイムゾーンの標準経度(例: JSTならUTC+9=135°E)からの
  * 経度差分だけを反映する。
+ *
+ * @param {number|null} longitudeDeg GPSの経度。nullの場合は「端末の
+ *   タイムゾーンの標準経度に居る」とみなし、経度補正を0にする
+ *   (GPS未取得時のフォールバック用、2026/08追加)。
  */
 function estimateSolarHour(date, longitudeDeg) {
   const localHour = date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
   const tzOffsetHours = -date.getTimezoneOffset() / 60; // 例: JSTなら+9
   const standardMeridian = tzOffsetHours * 15; // そのタイムゾーンの基準経度
-  const longitudeCorrectionHours = (longitudeDeg - standardMeridian) / 15;
+  const longitudeCorrectionHours = (longitudeDeg == null) ? 0 : (longitudeDeg - standardMeridian) / 15;
   let solarHour = localHour + longitudeCorrectionHours;
   if (solarHour < 0) solarHour += 24;
   if (solarHour >= 24) solarHour -= 24;
@@ -140,7 +172,8 @@ function analyzeImage(imageData, w, h) {
 
   // 色温度の粗い推定: R/B比が高い(赤みが強い)ほど低色温度(暖色/白熱灯)、
   // B/R比が高いほど高色温度(青みが強い/曇天・日陰)とみなす簡易近似。
-  // 物理的に厳密な色温度変換ではなく、Indoor/Outdoor判定用の相対指標。
+  // 物理的に厳密な色温度変換ではなく、Indoor/Outdoor判定・lighting.jsの
+  // 色味補正用の相対指標。
   const rbRatio = avgB > 0 ? avgR / avgB : 1;
   const estimatedColorTemperature = clamp(6500 / rbRatio, 1500, 12000);
 
@@ -255,6 +288,10 @@ export function createEnvironmentAnalyzer({ video, imageIntervalMs = DEFAULT_IMA
     gpsAccuracy: null,
     sunAltitude: null,
     sunAzimuth: null,
+    // 2026/08追加: 現在のsunAltitude/sunAzimuthがGPS由来(false)か、
+    // GPS未取得時の既定値フォールバック(true)かを示す。下流は
+    // 通常は区別せず使ってよい(デバッグ・将来の精度改善判断用)。
+    sunPositionIsRough: true,
     averageLuminance: null,
     skyColor: null,
     groundColor: null,
@@ -275,13 +312,30 @@ export function createEnvironmentAnalyzer({ video, imageIntervalMs = DEFAULT_IMA
   let gpsWatchId = null;
   let gpsPollTimer = null;
 
+  /**
+   * 太陽位置(高度・方位)を更新する。
+   * 2026/08変更: 従来はGPSの緯度/経度が無い場合、何も計算せず
+   * sunAltitude/sunAzimuthをnullのまま放置していた。これにより
+   * GPS許可が下りない実機では影の向き・長さが常に「情報なし」の
+   * 既定動作(main.js側の中立値0度・sunAltitude=45度扱い)に
+   * 固定されてしまっていた。
+   * 今回、GPS未取得時は既定緯度(FALLBACK_LATITUDE_DEG)+端末の
+   * ローカル時刻(タイムゾーンの標準経度を仮定)で「概算」の太陽位置を
+   * 常に計算するようにした。位置情報の許可を一切要求せずに動作する。
+   * GPSが取得できた場合は、次にこの関数が呼ばれた時点で自動的に
+   * 実際の緯度/経度を使った、より正確な値へ切り替わる。
+   */
   function updateSun() {
-    if (state.latitude == null || state.longitude == null) return;
     const now = new Date();
-    const solarHour = estimateSolarHour(now, state.longitude);
-    const { altitudeDeg, azimuthDeg } = getSunPosition(now, solarHour, state.latitude);
+    const hasGps = state.latitude != null && state.longitude != null;
+    const latDeg = hasGps ? state.latitude : FALLBACK_LATITUDE_DEG;
+    const solarHour = hasGps
+      ? estimateSolarHour(now, state.longitude)
+      : estimateSolarHour(now, null); // 経度不明時はタイムゾーン標準経度をそのまま使う
+    const { altitudeDeg, azimuthDeg } = getSunPosition(now, solarHour, latDeg);
     state.sunAltitude = altitudeDeg;
     state.sunAzimuth = azimuthDeg;
+    state.sunPositionIsRough = !hasGps;
   }
 
   function sampleImageOnce() {
@@ -299,6 +353,7 @@ export function createEnvironmentAnalyzer({ video, imageIntervalMs = DEFAULT_IMA
       // 「映像内で最も明るい場所」という粗い近似であることに注意)
       state.estimatedLightDirection = estimateBrightestDirection(imageData, canvas.width, canvas.height);
 
+      // GPSの有無に関わらず、常に(概算または実測の)太陽位置を更新する。
       updateSun();
       const scores = scoreEnvironment({
         imageAnalysis: analysis,
@@ -349,6 +404,9 @@ export function createEnvironmentAnalyzer({ video, imageIntervalMs = DEFAULT_IMA
 
   function start() {
     stop();
+    // GPSの成否を問わず、起動直後から概算の太陽位置を使えるようにする
+    // (位置情報の許可待ちで太陽位置が長時間nullのままになるのを防ぐ)。
+    updateSun();
     imageTimer = setInterval(sampleImageOnce, imageIntervalMs);
     sampleImageOnce();
     if (useGps && navigator.geolocation) {

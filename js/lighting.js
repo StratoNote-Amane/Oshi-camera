@@ -26,6 +26,23 @@
      ブレンドする。既存ロジックを置き換えるのではなく寄せるだけに
      留めているため、environmentStateが無い/値がおかしい場合でも
      既存の見た目からの破綻が小さい。
+
+   2026/08 更新（色温度の反映、ADR-015案）:
+   - js/environment-analyzer.jsの実体を確認できたため、上記1)で
+     見送っていたestimatedColorTemperature(1500K〜12000Kの粗い推定、
+     R/B比ベース)の反映を実装する。
+   - 色温度→RGBの変換は物理的に厳密なものではなく、Tanner Hellandの
+     近似式を簡略化したものを使用する(colorTemperatureToRGB())。
+     色温度の傾向(低いほど暖色/赤み、高いほど寒色/青み)を大まかに
+     再現する実用的な近似に留める。
+   - 実機写真で「部屋の色(暖色/寒色)とキャラクターの色味が一致しない」
+     というフィードバックがあったため、既存のtint計算(skyColor/
+     groundColorベース)へ、この色温度ベースの色をさらに弱くブレンド
+     する形で追加する(既存ロジックを置き換えない、ENV_ANALYZER_BLEND
+     と同じ重みを流用)。
+   - 数値は実機未確認の「たたき台」であり、まだ寄せ方が弱い/強すぎる
+     場合は本ファイルのENV_ANALYZER_BLEND、または末尾のCT_BLEND_EXTRA
+     を調整すること。
    ============================================================ */
 import * as THREE from 'three';
 
@@ -38,10 +55,57 @@ const SAMPLE_INTERVAL_MS = 400;
 // 画像ベース推定を置き換えない範囲の弱いブレンドに留めている。
 const ENV_ANALYZER_BLEND = 0.25;
 
+// 色温度ベースの色(colorTemperatureToRGB)をtintへブレンドする強さ。
+// skyColor/groundColorのブレンド(ENV_ANALYZER_BLEND)とは独立した
+// パラメータにしてある(色温度はR/B比という別の切り口の推定値であり、
+// 効き方を別々に調整できた方が実機調整がしやすいため)。
+const CT_BLEND_EXTRA = 0.3;
+
 // rimの初期色(このプロジェクトが最初から意図していた「背景に馴染ませるための
 // 縁光」の色)。環境色へ完全に置き換えるのではなく、この色とのブレンドとして
 // 残すことで「縁光らしさ」は保ちつつ、環境と乖離しないようにする。
 const RIM_BASE_COLOR = new THREE.Color(0xcfe8ff);
+
+/**
+ * 色温度(ケルビン)をおおよそのRGBへ変換する。
+ * Tanner Hellandのアルゴリズムを簡略化した近似式で、物理的に厳密な
+ * 変換ではない。あくまで「低いほど暖色(赤み)、高いほど寒色(青み)」
+ * という色温度の傾向を、追加のテーブルや外部ライブラリなしで
+ * 大まかに再現するための実用的な近似として使う。
+ * @param {number} kelvin 1000〜40000程度を想定(environment-analyzer.js
+ *   のestimatedColorTemperatureは1500〜12000にクランプ済み)
+ * @returns {THREE.Color}
+ */
+function colorTemperatureToRGB(kelvin) {
+  const temp = THREE.MathUtils.clamp(kelvin, 1000, 40000) / 100;
+  let r, g, b;
+
+  if (temp <= 66) {
+    r = 255;
+  } else {
+    r = 329.698727446 * Math.pow(temp - 60, -0.1332047592);
+  }
+
+  if (temp <= 66) {
+    g = 99.4708025861 * Math.log(temp) - 161.1195681661;
+  } else {
+    g = 288.1221695283 * Math.pow(temp - 60, -0.0755148492);
+  }
+
+  if (temp >= 66) {
+    b = 255;
+  } else if (temp <= 19) {
+    b = 0;
+  } else {
+    b = 138.5177312231 * Math.log(temp - 10) - 305.0447927307;
+  }
+
+  return new THREE.Color(
+    THREE.MathUtils.clamp(r, 0, 255) / 255,
+    THREE.MathUtils.clamp(g, 0, 255) / 255,
+    THREE.MathUtils.clamp(b, 0, 255) / 255
+  );
+}
 
 /**
  * @param {object} args
@@ -119,23 +183,39 @@ export function createEnvironmentLighting({ video, hemi, dir, rim, renderer, bas
     //       クールな水色(0xcfe8ff)に常時固定されていた
     // (1)は白寄りの割合を下げ、(2)はrimにも環境色を反映することで対応する。
     const tint = smoothedColor.clone().lerp(new THREE.Color(1, 1, 1), 0.35);
-    dir.color.copy(tint);
-    hemi.color.copy(tint);
-    // rimは「縁光らしさ」を保つため基準色(クール寄り)を残しつつ、
-    // 大部分は環境色へ追従させる(暖色の部屋では暖色の縁光になる)。
-    rim.color.copy(RIM_BASE_COLOR.clone().lerp(tint, 0.75));
 
     // EnvironmentAnalyzerのskyColor(上方向)/groundColor(下方向)が取得できる場合、
     // Hemisphere Lightの上下色へ弱くブレンドする。環境認識がまだドラフト運用
     // (CONSTRAINTS.md 1節)であることを踏まえ、既存の画像ベース色を置き換えず
-    // ENV_ANALYZER_BLEND分だけ寄せるに留める。colorTemperatureはenvironment-analyzer.js
-    // の実体確認後に別途対応する(このファイル冒頭コメント参照)。
+    // ENV_ANALYZER_BLEND分だけ寄せるに留める。
     if (envState && envState.skyColor && envState.groundColor) {
       const sky = new THREE.Color(envState.skyColor.r, envState.skyColor.g, envState.skyColor.b);
       const ground = new THREE.Color(envState.groundColor.r, envState.groundColor.g, envState.groundColor.b);
       hemi.color.lerp(sky, ENV_ANALYZER_BLEND);
       hemi.groundColor.copy(hemi.groundColor || new THREE.Color(0x2a2a33)).lerp(ground, ENV_ANALYZER_BLEND);
+      // tint(dir/rimへ反映する色)にも同じ根拠(空/地面の平均色)を弱く寄せる。
+      // これにより「Hemisphereだけ環境色が乗ってDirectional/Rimは乗らない」
+      // という不一致を防ぐ。
+      const skyGroundAvg = sky.clone().lerp(ground, 0.5);
+      tint.lerp(skyGroundAvg, ENV_ANALYZER_BLEND * 0.6);
     }
+
+    // 2026/08追加: estimatedColorTemperature(1500K〜12000Kの粗い推定)を
+    // RGBへ変換し、tintへさらに弱くブレンドする。以前は「実体未確認」を
+    // 理由に見送っていたが、environment-analyzer.jsの実装を確認できた
+    // ため反映する。色温度はR/B比という、skyColor/groundColorの平均とは
+    // 別の切り口の推定値であるため、独立した重み(CT_BLEND_EXTRA)で
+    // ブレンドする(効きが強すぎ/弱すぎる場合はここを調整する)。
+    if (envState && typeof envState.estimatedColorTemperature === 'number') {
+      const ctColor = colorTemperatureToRGB(envState.estimatedColorTemperature);
+      tint.lerp(ctColor, CT_BLEND_EXTRA);
+    }
+
+    dir.color.copy(tint);
+    hemi.color.lerp(tint, 0.5);
+    // rimは「縁光らしさ」を保つため基準色(クール寄り)を残しつつ、
+    // 大部分は環境色へ追従させる(暖色の部屋では暖色の縁光になる)。
+    rim.color.copy(RIM_BASE_COLOR.clone().lerp(tint, 0.75));
 
     renderer.toneMappingExposure = THREE.MathUtils.clamp(baseToneExposure / Math.sqrt(factor), 0.6, 1.3);
 
