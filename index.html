@@ -7,6 +7,41 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="OshiCamera">
 <meta name="theme-color" content="#06060a">
+<link rel="apple-touch-icon" id="oshi-icon" href="">
+<!-- ホーム画面アイコン：呼吸するオーブ(シャッター)のモチーフをそのままアイコン化した。
+     画像ファイルを増やさず、Flowly(基礎開発/Flowly)と同じくcanvasでその場生成する方式。
+     ノービルド・追加アセット無しでの運用を維持できる(CONSTRAINTS.md準拠)。 -->
+<script id="oshi-icon-gen">(function(){
+function drawIcon(canvas){
+  var S=canvas.width, ctx=canvas.getContext('2d'), r=S*0.22;
+  function roundedRectPath(){
+    ctx.beginPath();
+    ctx.moveTo(r,0);ctx.lineTo(S-r,0);ctx.arcTo(S,0,S,r,r);
+    ctx.lineTo(S,S-r);ctx.arcTo(S,S,S-r,S,r);
+    ctx.lineTo(r,S);ctx.arcTo(0,S,0,S-r,r);
+    ctx.lineTo(0,r);ctx.arcTo(0,0,r,0,r);ctx.closePath();
+  }
+  ctx.fillStyle='#06060a'; roundedRectPath(); ctx.fill();
+  var glow=ctx.createRadialGradient(S*0.5,S*0.46,0,S*0.5,S*0.5,S*0.62);
+  glow.addColorStop(0,'rgba(231,185,76,0.16)'); glow.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=glow; roundedRectPath(); ctx.fill();
+  var cx=S*0.5, cy=S*0.5, rOuter=S*0.225;
+  ctx.save();
+  ctx.shadowColor='#e7b94c'; ctx.shadowBlur=S*0.05;
+  ctx.strokeStyle='rgba(244,241,234,0.55)'; ctx.lineWidth=S*0.028;
+  ctx.beginPath(); ctx.arc(cx,cy,rOuter,0,Math.PI*2); ctx.stroke();
+  ctx.shadowBlur=0;
+  ctx.fillStyle='#f4f1ea'; ctx.beginPath(); ctx.arc(cx,cy,rOuter*0.62,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+var c=document.createElement('canvas'); c.width=180; c.height=180; drawIcon(c);
+var png=c.toDataURL('image/png');
+document.getElementById('oshi-icon').href=png;
+['57','72','76','114','120','144','152','180'].forEach(function(sz){
+  var l=document.createElement('link'); l.rel='apple-touch-icon';
+  l.setAttribute('sizes',sz+'x'+sz); l.href=png; document.head.appendChild(l);
+});
+})();</script>
 <title>推しカメラ (prototype)</title>
 <link rel="stylesheet" href="style.css">
 </head>

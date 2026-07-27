@@ -41,13 +41,22 @@ html, body {
 
 button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 
-/* ===== 選択画面・スタート画面（共通トーン：漆黒＋余白＋一点だけ金） ===== */
+/* ===== 選択画面・スタート画面（共通トーン：漆黒＋余白＋一点だけ金） =====
+   重要: select-screenはstart-screenより必ず手前に来る必要がある
+   (両方ともDOM上デフォルトでdisplay:flex、JS側は「1体しかいない場合」
+   等の条件でのみ.style.display='none'を設定する設計のため、キャラクターが
+   複数いる間は起動直後に両方が同時にvisibleな状態になり得る)。
+   z-indexを同一にしてしまうと後からDOMに現れるstart-screenが上に乗り、
+   選択画面がクリックできなくなり「何を選んでも最初のキャラが起動する」
+   という回帰バグになる(2026/07 UI一新時に一度混入させ、修正済み)。 */
 #select-screen, #start-screen {
-  position: fixed; inset: 0; z-index: 500;
+  position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;
   background: var(--bg);
   padding: 32px;
 }
+#select-screen { z-index: 550; }
+#start-screen { z-index: 500; }
 .select-card, .start-card { text-align: center; max-width: 340px; width: 100%; }
 .select-card h1, .start-card h1 {
   font-size: 28px; font-weight: 300; letter-spacing: .12em;
