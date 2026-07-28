@@ -33,6 +33,31 @@
    全開にはしない」という妥当性チェックを追加する。あくまで対症療法で
    あり、EnvironmentAnalyzer本体のGPS/画像の重み付け見直し(EMA・
    ヒステリシス化)が正式な対応になる。
+
+   【2026/08追記(ADR-015案の実機検証で発見、太陽高度による減衰の修正)】
+   ホーム画面インストール(SPA)とSafari通常タブの両方で「東京・23時台・
+   室内」という同一条件で検証したところ、SPA側は影がほぼContact Shadow
+   のみ(意図通り)だったのに対し、Safari側は影が後方向へ長く伸びる
+   現象が確認された。原因は、深夜で太陽高度が-34〜-35度(地平線を
+   大きく下回る、天文学的に正しい値)であるにも関わらず、従来の
+   減衰処理が「sunAltitude<=2度なら一律0.4倍」という単純な閾値の
+   ままだったこと。さらにdirectional-shadow.js側で太陽高度を
+   4〜88度にクランプしているため、-35度は「影が最も長く伸びる
+   4度」に丸められてしまう。indoor/outdoor判定のスコアが50%前後で
+   不安定にハンチングする状況(skyColorの青み判定が閾値付近で
+   ぶれるため)と組み合わさり、outdoor判定に振れた瞬間だけ
+   directionalStrengthが0.4倍(indoor時の0.1倍前後の3倍以上)に
+   跳ね上がり、かつ影の長さは常に最大、という組み合わせで
+   「Safariだけ後方向に長い影が出る」症状が再現したと考えられる。
+
+   夜間(太陽が地平線を大きく下回っている)は、indoor/outdoor判定が
+   どちらに転んでも「太陽由来の指向性影は物理的に存在しない」のが
+   正しい。そのため、屋内外判定に頼る一律倍率ではなく、太陽高度
+   そのものから「地平線付近〜市民薄明終了(-6度が目安)にかけて
+   なだらかに1→0へ収束するスムーズな減衰係数」へ変更した
+   (sunAltitudeToDirectionalFactor())。日中の低い太陽(日の出・
+   日の入り前後)はむしろ強めの指向性影が自然なため、旧実装の
+   一律0.4倍よりも高い係数を返すようになる点にも注意。
    ============================================================ */
 
 /**
@@ -48,6 +73,32 @@ export function looksLikeOutdoorSky(skyColor) {
   // 青空は本来 blueExcess > 0 になりやすい。曇天等でほぼ無彩色の
   // ケースも許容するため、閾値はマイナス側に少し余裕を持たせている。
   return blueExcess > -0.05;
+}
+
+// smoothstep(端点で傾きが0になる滑らかな0→1補間)。線形補間だと
+// 減衰の始まり/終わりで見た目が不自然にカクつくため使用する。
+function smoothstep01(t) {
+  const c = Math.max(0, Math.min(1, t));
+  return c * c * (3 - 2 * c);
+}
+
+// 太陽高度(度)から、Directional Shadowの「太陽由来の指向性影」としての
+// 妥当性係数(0〜1)を返す。
+//   - +6度以上: 通常の日中とみなし1.0(減衰なし)
+//   - -8度以下: 市民薄明(-6度)も終えた夜間とみなし0.0(完全に消す)
+//   - その間: なだらかにsmoothstepで補間
+// 旧実装は「2度以下なら一律0.4倍」という単純な閾値だったため、
+// 深夜(-30度台)でも0.4倍というそれなりの強さが残ってしまい、
+// indoor/outdoor判定のハンチングと組み合わさって「本来消えるべき
+// 夜間の影が時々強く長く出る」不具合の原因になっていた。
+const ALTITUDE_FACTOR_FULL_DEG = 6;   // これ以上は減衰なし
+const ALTITUDE_FACTOR_ZERO_DEG = -8;  // これ以下は完全に0
+export function sunAltitudeToDirectionalFactor(sunAltitudeDeg) {
+  if (sunAltitudeDeg == null) return 1;
+  if (sunAltitudeDeg >= ALTITUDE_FACTOR_FULL_DEG) return 1;
+  if (sunAltitudeDeg <= ALTITUDE_FACTOR_ZERO_DEG) return 0;
+  const t = (sunAltitudeDeg - ALTITUDE_FACTOR_ZERO_DEG) / (ALTITUDE_FACTOR_FULL_DEG - ALTITUDE_FACTOR_ZERO_DEG);
+  return smoothstep01(t);
 }
 
 /**
@@ -103,9 +154,17 @@ export function computeEnvironmentShadowParams(environmentState) {
     if (!plausibleOutdoor) directionalStrength = Math.min(directionalStrength, 0.35);
   }
 
-  if (sunAltitude != null && sunAltitude <= 2) {
-    directionalStrength *= 0.4;
-  }
+  // 2026/08修正: 従来は「sunAltitude<=2度なら一律0.4倍」という硬い閾値
+  // だったため、深夜(-30度台)でもindoor/outdoor判定がoutdoor側に
+  // 振れた瞬間だけ0.4倍(indoor時の1/3〜1/4程度に相当)というそれなりの
+  // 強さが残り、かつdirectional-shadow.js側の高度クランプ(4〜88度)に
+  // より影の長さは常に最大になる、という組み合わせで「本来消えるべき
+  // 夜間の影が時々強く長く出る」不具合の原因になっていた。
+  // 太陽高度そのものから0〜1へなだらかに減衰する係数に置き換える
+  // (sunAltitudeToDirectionalFactor()、市民薄明終了=-6度を目安に
+  // -8度でほぼ完全に0になる)。indoor/outdoor判定のハンチングに
+  // 関わらず、夜間は確実にDirectional Shadowが消える。
+  directionalStrength *= sunAltitudeToDirectionalFactor(sunAltitude);
 
   const contactContrast = 0.85 + Math.max(0, Math.min(1, averageLuminance)) * 0.3;
 
@@ -117,6 +176,6 @@ export function computeEnvironmentShadowParams(environmentState) {
     directionalStrength: Math.max(0, Math.min(1, directionalStrength)),
     contactContrast: Math.max(0.5, Math.min(1.15, contactContrast)),
     shadowColor,
-    reason: `${environmentType}(outdoorScore=${Math.round(outdoorScore)}, plausibleOutdoor=${plausibleOutdoor})`,
+    reason: `${environmentType}(outdoorScore=${Math.round(outdoorScore)}, plausibleOutdoor=${plausibleOutdoor}, sunAltitude=${sunAltitude == null ? 'n/a' : sunAltitude.toFixed(1) + '°'})`,
   };
 }
