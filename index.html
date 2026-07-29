@@ -103,29 +103,22 @@ document.getElementById('oshi-icon').href=png;
     </div>
   </div>
 
-  <!-- ファン・ドック: トリガーから円弧状に展開する5個のボタン。
-       カメラ切替(旧switch-cam-btn)はhinya指示によりADR-016で廃止済み。 -->
+  <!-- ファン・ドック: トリガーから円弧状に展開する6個のボタン。
+       カメラ切替(旧switch-cam-btn)はhinya指示によりADR-016で廃止済み。
+       アングル切替(全身/上半身/顔アップ)は廃止し、代わりにデバッグログ
+       ボタン(旧・画面左上の🐛単独ボタン)をここへ集約した。 -->
   <div id="top-dock">
     <button id="reticle-btn" class="fan-btn" title="配置/再配置"><span>◎</span><span class="fan-label">位置</span></button>
     <button id="shadow-adjust-btn" class="fan-btn" title="影の向き・長さ調整"><span>◐</span><span class="fan-label">影</span></button>
     <button id="timer-btn" class="fan-btn" title="セルフタイマー"><span>⏱</span><span class="fan-label">タイマー</span></button>
     <button id="mode-btn" class="fan-btn" title="写真/動画 切替"><span class="mode-chip-fan">📷</span><span class="fan-label">写真</span></button>
-    <button id="reset-btn" class="fan-btn" title="位置と向きの基準をリセット"><span>⟲</span><span class="fan-label">リセット</span></button>
+    <button id="reset-btn" class="fan-btn" title="推しを選び直す"><span>⟲</span><span class="fan-label">選び直す</span></button>
+    <button id="debug-btn" class="fan-btn" title="デバッグログ"><span>🐛</span><span class="fan-label">ログ</span></button>
   </div>
 
   <div id="bottom-controls">
-    <div id="framing-bar"></div>
-
     <div id="ring-label"></div>
-    <div id="ring-svg">
-      <button id="cat-chip"><span id="cat-label">ポーズ</span></button>
-      <button class="dock-arrow" id="dock-prev" aria-label="前へ">‹</button>
-      <div class="dock-current" id="dock-current">
-        <span class="dock-emoji" id="dock-emoji">🧍</span>
-      </div>
-      <button class="dock-arrow" id="dock-next" aria-label="次へ">›</button>
-    </div>
-    <div id="dock-dots"></div>
+    <div id="pose-rings"></div>
 
     <div id="bottom-bar">
       <div id="shutter-status"></div>
@@ -149,7 +142,8 @@ document.getElementById('oshi-icon').href=png;
   </div>
 </div>
 
-<!-- 影の向き・長さ 手動調整パネル(ADR-016: ハロー・ダイヤル方式) -->
+<!-- 影の向き・長さ 手動調整パネル(ADR-016: ハロー・ダイヤル方式)
+     2026/08: モデルと重ならないよう画面下部中央から右側へ移動した。 -->
 <div id="shadow-panel">
   <div class="shadow-panel-head">
     <span>影の向き・長さ</span>
@@ -169,6 +163,20 @@ document.getElementById('oshi-icon').href=png;
     <button id="shadow-reset-btn" class="shadow-reset-btn">自動に戻す</button>
   </div>
   <p class="shadow-panel-hint">通常は環境認識による自動調整です。撮影時に影が不自然な場合だけ、上のボタンをオンにして手動で直してください。</p>
+</div>
+
+<!-- 指差しポーズ専用: 指す方向の微調整パネル。「指差し」ポーズを選んでいる
+     間だけ表示される(main.js側でポーズ切替と連動して表示/非表示・値リセット)。 -->
+<div id="point-adjust-panel">
+  <div class="point-adjust-head">指す方向</div>
+  <div class="point-adjust-row">
+    <label>左右</label>
+    <input type="range" id="point-yaw" min="-30" max="30" step="1" value="0">
+  </div>
+  <div class="point-adjust-row">
+    <label>上下</label>
+    <input type="range" id="point-pitch" min="-25" max="25" step="1" value="0">
+  </div>
 </div>
 
 <div id="pose-toast"></div>

@@ -17,6 +17,13 @@
    getAzimuthConfidence()は常にこの「安定化後」の値を返すようにした。
    下流(lighting.js/js/shadow/*)は変更なしで、より安定した入力を
    受け取れるようになる。
+
+   2026/08更新: デバッグコンソールのトグルボタンを画面左上の単独ボタン
+   ではなく、main.js側のファン・ドック(右上のボタン一覧)に統合する
+   指示を受け、createDebugConsole()をexternalToggle:trueで生成する
+   ように変更した。これにより自前のフローティングボタンは生成されず、
+   代わりにtoggleDebugConsole()をinitDiagnostics()の戻り値として
+   公開し、main.js側の「ログ」ボタンからそのまま呼べるようにしている。
    ============================================================ */
 import { createEnvironmentAnalyzer } from './environment-analyzer.js';
 import { verifyProjectionConsistency } from './camera-projection.js';
@@ -36,7 +43,9 @@ import { createEnvironmentStabilizer } from './environment-stabilizer.js';
  * @param {() => number} args.baseVerticalFovDeg 現在のcamera.fov相当値を返す関数
  */
 export function initDiagnostics({ video, stage, camera, renderer, getCharacter, placement, applyPlacement, baseVerticalFovDeg }) {
-  createDebugConsole();
+  // externalToggle:true — フローティングの🐛ボタンは生成せず、main.js側の
+  // ファン・ドック(「ログ」ボタン)からtoggleDebugConsole()経由で開閉する。
+  const debugConsole = createDebugConsole({ externalToggle: true });
 
   const envAnalyzer = createEnvironmentAnalyzer({ video, useGps: true });
   const stabilizer = createEnvironmentStabilizer();
@@ -96,5 +105,12 @@ export function initDiagnostics({ video, stage, camera, renderer, getCharacter, 
     return s.environmentType === 'indoor' ? 0.15 : Math.max(0.4, Math.min(1, s.outdoorScore / 100));
   }
 
-  return { start, logProjectionConsistency, runCalibration, getAzimuthConfidence, getEnvironmentState };
+  return {
+    start,
+    logProjectionConsistency,
+    runCalibration,
+    getAzimuthConfidence,
+    getEnvironmentState,
+    toggleDebugConsole: debugConsole.toggle,
+  };
 }

@@ -1,10 +1,8 @@
 /* ============================================================
    shadow-controls-ui.js — 影の向き・長さ 手動調整パネル(ADR-016改訂)
    ------------------------------------------------------------
-   【変更点】旧版はスライダー2本(向き/長さ)+トグルの計3操作だった。
-   「もっと簡単に」というhinya指示を受け、円形パッド内でハンドル
-   (太陽の印)をドラッグするだけで、向き(角度)と長さ(中心からの距離)を
-   1つのジェスチャーで同時に決められる方式へ全面変更した。
+   円形パッド内でハンドル(太陽の印)をドラッグするだけで、向き(角度)と
+   長さ(中心からの距離)を1つのジェスチャーで同時に決められる方式。
 
    角度の基準: パッド上部(12時の方向)を0°とし、時計回りに-180〜180°で
    表す。この値をそのままshadowRig.setShadowDirection(deg)へ渡す
@@ -13,15 +11,22 @@
    (影が長い/太陽が低い)。shadowRig.setShadowLength(0〜100)へそのまま渡す
    (shadow-rig.js側で太陽高度88〜4度への変換を担う、ここでは変換しない)。
 
-   意図的にオン/オフ(影自体の表示切替)は実装していない(2026/07/26
-   hinya指示、旧版から継続)。既定は常に「自動」で、パネルを開いただけ
-   では何も変化しない(手動トグルを明示的にオンにして初めてオーバーライド
-   が有効になる)。
+   意図的にオン/オフ(影自体の表示切替)は実装していない。既定は常に
+   「自動」で、パネルを開いただけでは何も変化しない(手動トグルを
+   明示的にオンにして初めてオーバーライドが有効になる)。
 
-   CONSTRAINTS.md「モジュール分割ルール」に従い、main.jsへ直接書かず
-   この独立モジュールとして実装している。依存はShadowRigが公開する
-   setShadowDirection/setShadowLength/resetShadowManualOverride/
-   getShadowManualState のみ。
+   【2026/08修正: 手動調整が即座に反映されない不具合への対応】
+   shadowRig.setShadowDirection/setShadowLength はdirectional-shadow.js内に
+   数値を保存するだけで、実際にライトの位置(directional.update())を
+   再計算するのはshadow-rig.jsのupdate()——つまりmain.js側の
+   applyPlacement()が呼ばれた時だけだった。そのため、ダイヤルをドラッグ
+   しても「キャラクターを動かす等、何か別の操作をするまで影が動いた
+   ように見えない」という体感上の遅延バグがあった。
+   この修正では、ダイヤル操作・手動トグルのON/OFF・リセットのいずれの
+   タイミングでも、呼び出し側(main.js)から渡された onManualChange
+   コールバック(実体はapplyPlacement)を都度呼び、影を即座に再計算させる。
+   CONSTRAINTS.md「モジュール分割ルール」に従い、shadow-rig.js自体や
+   directional-shadow.jsには一切手を入れていない。
    ============================================================ */
 
 const DEFAULT_AZIMUTH = 0;
@@ -29,9 +34,14 @@ const DEFAULT_LENGTH_PERCENT = 0; // 中心(短い)から開始
 
 /**
  * @param {object} shadowRig js/shadow/shadow-rig.jsのcreateShadowRig()戻り値
+ * @param {object} [options]
+ * @param {() => void} [options.onManualChange] 手動値が変化するたびに呼ぶ
+ *   コールバック(main.jsのapplyPlacementを渡す想定)。渡さない場合でも
+ *   従来通り動作するが、影が即座に再計算されない場合がある。
  * @returns {{ open: () => void, close: () => void } | null}
  */
-export function initShadowControlsUI(shadowRig) {
+export function initShadowControlsUI(shadowRig, options = {}) {
+  const { onManualChange } = options;
   const openBtn = document.getElementById('shadow-adjust-btn');
   const panel = document.getElementById('shadow-panel');
   const closeBtn = document.getElementById('shadow-panel-close');
@@ -55,9 +65,14 @@ export function initShadowControlsUI(shadowRig) {
     handle.style.transform = `translate(${dxPx}px, ${dyPx}px)`;
   }
 
+  function notifyChange() {
+    if (typeof onManualChange === 'function') onManualChange();
+  }
+
   function applyToRig() {
     shadowRig.setShadowDirection(azimuthDeg);
     shadowRig.setShadowLength(lengthPercent);
+    notifyChange();
   }
 
   /** azimuthDeg(-180〜180、上=0、時計回り)+lengthPercent(0〜100)から、
@@ -79,6 +94,7 @@ export function initShadowControlsUI(shadowRig) {
       applyToRig();
     } else {
       shadowRig.resetShadowManualOverride();
+      notifyChange();
     }
   }
 

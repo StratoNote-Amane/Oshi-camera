@@ -7,7 +7,7 @@ import { initShadowControlsUI } from './js/shadow-controls-ui.js';
 import { applyPhotoFinish } from './js/postfx.js';
 import { applyAtmosphericPerspective } from './js/atmosphere.js';
 import { CHARACTERS } from './js/characters-data.js';
-import { loadCharacter as loadCharacterCore } from './js/character.js';
+import { loadCharacter as loadCharacterCore, disposeCharacter } from './js/character.js';
 import { initDiagnostics } from './js/diagnostics.js';
 import { createIdleMotionManager } from './js/idle-motion.js';
 import { GroundEstimator } from './js/environment/ground-estimator.js';
@@ -33,6 +33,7 @@ const video         = document.getElementById('camera-video');
 const canvas        = document.getElementById('three-canvas');
 const reticleBtn    = document.getElementById('reticle-btn');
 const resetBtn      = document.getElementById('reset-btn');
+const debugBtn      = document.getElementById('debug-btn');
 const shutterBtn    = document.getElementById('shutter-btn');
 const resultScreen  = document.getElementById('result-screen');
 const resultImg     = document.getElementById('result-img');
@@ -46,11 +47,13 @@ const countdownOverlay = document.getElementById('countdown-overlay');
 const countdownNum = document.getElementById('countdown-num');
 const flashOverlay = document.getElementById('flash-overlay');
 const shutterStatus = document.getElementById('shutter-status');
-const framingBar = document.getElementById('framing-bar');
 const modeBtn = document.getElementById('mode-btn');
 const resultImgWrap = document.getElementById('result-imgwrap');
 const resultVideo = document.getElementById('result-video');
 const poseToast = document.getElementById('pose-toast');
+const pointAdjustPanel = document.getElementById('point-adjust-panel');
+const pointYawSlider = document.getElementById('point-yaw');
+const pointPitchSlider = document.getElementById('point-pitch');
 
 let poseToastTimer = null;
 function showPoseToast(text) {
@@ -75,6 +78,12 @@ const DEFAULT_PLACEMENT = { ...placement };
 let currentStream = null;
 let currentBlobUrl = null;
 let lastBlob = null;
+
+// スタート画面(カメラ/センサー許可フロー)を一度でも完走したかどうか。
+// resetBtn経由で「推しを選び直す」際、2回目以降は許可ダイアログを
+// 再度出す必要がないため、選び直し時はこのフラグを見て
+// キャラクターの再読み込みだけを行う(start-screenへは戻らない)。
+let appStarted = false;
 
 /* ============================================================
    three.js セットアップ
@@ -138,7 +147,10 @@ const shadowRig = createShadowRig(scene, { renderer, quality: 'high' });
 // 影の向き・長さ 手動調整パネル(ADR-016でハロー・ダイヤル方式に刷新)。
 // 自動推定が撮影時に破綻した場合の保険。UIロジックはjs/shadow-controls-ui.js
 // に分離し、main.js側は生成のみを行う(CONSTRAINTS.md モジュール分割ルール)。
-initShadowControlsUI(shadowRig);
+// onManualChangeにapplyPlacementを渡すことで、ダイヤル操作・手動トグルの
+// ON/OFF・リセットのいずれでも影が即座に再計算されるようにしている
+// (2026/08修正、詳細はjs/shadow-controls-ui.js冒頭コメント参照)。
+const shadowControls = initShadowControlsUI(shadowRig, { onManualChange: () => applyPlacement() });
 
 // 環境解析(GPS/太陽位置/カメラ画像解析)・投影整合性チェック・距離較正・
 // 画面内デバッグコンソールの初期化。CONSTRAINTS.md 1節の通り、まだ
@@ -150,6 +162,13 @@ const diagnostics = initDiagnostics({
   applyPlacement,
   baseVerticalFovDeg: () => camera.fov,
 });
+
+// デバッグコンソールの開閉ボタンは、以前は画面左上に単独で浮いていたが、
+// 「右上のボタン一覧(ファン・ドック)に集約してほしい」という指示を受け、
+// #debug-btn(top-dock内)から開閉するように変更した。
+if (debugBtn) {
+  debugBtn.addEventListener('click', () => diagnostics.toggleDebugConsole());
+}
 
 // 環境光推定(平均色/輝度/簡易光源方向/露出)は js/lighting.js に委譲。
 // getEnvironmentStateを渡すことで、EnvironmentAnalyzerのaverageLuminance/
@@ -213,11 +232,61 @@ function loadCharacter(def) {
 }
 
 /* ============================================================
-   ポーズ/表情セレクター(分割リング)
+   カメラのフレーミング(自動)
+   ------------------------------------------------------------
+   2026/08: 「全身/上半身/顔アップ」の手動切替ボタン(旧#framing-bar)は
+   廃止した。代わりに、ポーズに応じてカメラ位置を自動で切り替える方式に
+   変更した。「自撮り」ポーズ(poses.hip)を選ぶと、腕を伸ばして自分を
+   撮っているような距離感・高さへ自動でカメラを寄せ、それ以外のポーズに
+   戻すと通常の全身framingへ自動的に戻る。
+   ============================================================ */
+const DEFAULT_CAM_POS = { z: 0, y: 0 };
+// 自撮り(hip)ポーズ用のカメラ位置。腕を伸ばして自分を写す距離感・
+// 見上げ気味の角度に寄せる(実機未確認のたたき台、違和感があれば要調整)。
+const SELFIE_CAM_POS = { z: -1.3, y: 0.35 };
+
+function applyCameraFraming(poseKey) {
+  const p = poseKey === 'hip' ? SELFIE_CAM_POS : DEFAULT_CAM_POS;
+  camera.position.z = p.z;
+  camera.position.y = p.y;
+  applyPlacement();
+}
+
+/* ============================================================
+   指差しポーズ 専用: 指す方向の微調整パネル
+   ------------------------------------------------------------
+   「指差し」ポーズ(poses.thinking)を選んでいる間だけ表示し、
+   スライダーで右腕/右ひじの向き(character.jsのpointYaw/pointPitch
+   全体オフセット)を調整できるようにする。他のポーズへ切り替えたら
+   値を0に戻す(見た目に影響を残さないため)。
+   ============================================================ */
+function updatePointAdjustVisibility(poseKey) {
+  const show = poseKey === 'thinking';
+  pointAdjustPanel.classList.toggle('show', show);
+  if (!show) {
+    pointYawSlider.value = '0';
+    pointPitchSlider.value = '0';
+    if (activeCharacter) {
+      activeCharacter.setGlobalOffset('pointYaw', 0);
+      activeCharacter.setGlobalOffset('pointPitch', 0);
+    }
+  }
+}
+pointYawSlider.addEventListener('input', () => {
+  if (activeCharacter) activeCharacter.setGlobalOffset('pointYaw', Number(pointYawSlider.value));
+});
+pointPitchSlider.addEventListener('input', () => {
+  if (activeCharacter) activeCharacter.setGlobalOffset('pointPitch', Number(pointPitchSlider.value));
+});
+
+/* ============================================================
+   ポーズ/表情セレクター(常時2段のリング)
    ------------------------------------------------------------
    実体はグローバルスクリプトのwindow.PoseRingとして
    index.htmlで先に読み込んでいる(main.jsより前・type=moduleではない
    通常scriptとして読み込むことで、main.js側からそのまま参照できる)。
+   2026/08: 内部実装(js/pose-ring.js)はポーズ⇄表情のタブ切替から
+   常時2段表示へ変更したが、ここから呼ぶ公開APIの形は変わっていない。
    ============================================================ */
 function buildPoseRing(def) {
   const poseItems = Object.entries(def.poses).map(([key, p]) => ({ key, emoji: p.emoji, label: p.label }));
@@ -233,7 +302,8 @@ function buildPoseRing(def) {
         activeCharacter.setPose(itemKey);
         // 「座る」等centerOffsetを使うポーズは足元のワールドYが変わるため、
         // ポーズ切り替え時にも接地影の位置を再計算する。
-        applyPlacement();
+        applyCameraFraming(itemKey);
+        updatePointAdjustVisibility(itemKey);
         showPoseToast(`ポーズ: ${item.label}`);
       } else if (categoryKey === 'expr') {
         activeCharacter.setExpression(itemKey);
@@ -334,6 +404,11 @@ function applyPlacement() {
 
    縦ドラッグ = 奥行き(Z、前後)、横ドラッグ = 左右(X)、という
    「地図を見下ろすような」操作感にしている。
+
+   2026/08: 位置の設定・再設定(reticle-btn経由)の間は、ポーズ/表情
+   リング等の操作UIが画面下部に表示されたままだと配置操作の邪魔になる
+   ため、初回設置時と同じ`placement-pending`クラスをuiLayerへ付与し、
+   一時的に隠すようにした(showReticleAt/endPlacementMode参照)。
    ============================================================ */
 const placementConfirmBtn = document.getElementById('placement-confirm-btn');
 
@@ -383,6 +458,9 @@ reticleBtn.addEventListener('click', () => {
   if (!placementMode) {
     placementMode = true;
     reticleBtn.classList.add('active');
+    // 位置の設定/再設定中はポーズ/表情リング等を一時的に隠し、
+    // 配置操作に集中できるようにする(2026/08追加)。
+    uiLayer.classList.add('placement-pending');
     showReticleAt(placement.x, placement.z);
     showPoseToast('円をドラッグして位置を決め、「ここに配置」を押してください');
   } else {
@@ -571,15 +649,14 @@ window.addEventListener('orientationchange', () => {
    ジェスチャー操作
    ------------------------------------------------------------
    1本指ドラッグ: X/Y移動
-   1本指タップ(短時間・ほぼ動かさない): タップした床の位置へ自動配置
    2本指ピンチ: 拡縮(scale)
    2本指ひねり: 回転(rotY)
    2本指の縦方向の動き: 奥行き(Z)移動
-   ============================================================ */
-// タップと判定する閾値(これを超えて動く/長押しするとドラッグ扱いのまま)
-const TAP_MAX_MOVE_PX = 12;
-const TAP_MAX_DURATION_MS = 350;
 
+   2026/08: 「画面タップで位置が変わる」機能(1本指タップでの
+   自動配置)は誤操作の原因になりやすいため廃止した。位置決めは
+   常に🎯(reticle-btn)経由のレティクル操作のみで行う。
+   ============================================================ */
 // 2本指の縦ドラッグでどこまでZを動かせるか(m、カメラ前方向)。
 const MIN_CHARACTER_DISTANCE_Z = -25;
 const MAX_CHARACTER_DISTANCE_Z = -0.8;
@@ -596,67 +673,20 @@ const touchState = {
   mode: null, lastX: 0, lastY: 0,
   startDist: 0, startAngle: 0, startScale: 1, startRotY: 0,
   startMidY: 0, startZ: 0,
-  startX: 0, startY: 0, startTime: 0, hadMultiTouch: false,
+  hadMultiTouch: false,
   gestureLock: null, // null | 'planar' | 'depth'
+  reticleDistAtStart: 0,
 };
 function touchDist(t0, t1) { return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY); }
 function touchAngle(t0, t1) { return Math.atan2(t1.clientY - t0.clientY, t1.clientX - t0.clientX); }
 function touchMidY(t0, t1) { return (t0.clientY + t1.clientY) / 2; }
 function normalizeAngle(a) { a = (a + Math.PI) % (2 * Math.PI); if (a < 0) a += 2 * Math.PI; return a - Math.PI; }
 
-const _floorRaycaster = new THREE.Raycaster();
-/**
- * 画面上の1点(clientX/Y)を、キャラクターが「今すでに立っている高さ」と
- * 同じ水平面に投影し、そのワールド座標(x,z)を返す。
- *
- * 【2026/07/26追記】この関数はcamera.quaternionを経由するレイキャストを
- * 行うが、main.jsがジャイロによるcamera.quaternionの更新を廃止したため、
- * cameraの向きは常に固定(初期値)である。そのためこの関数の結果は
- * フレームごとに変化しない決定論的な計算になり、以前懸念していた
- * 「ジャイロ由来の姿勢が不安定なことによる交点の発散」という問題は
- * 構造的に解消している。
- */
-function computeFloorPointFromScreen(clientX, clientY) {
-  if (!activeCharacter) return null;
-  const rect = stage.getBoundingClientRect();
-  const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
-  const ndcY = -(((clientY - rect.top) / rect.height) * 2 - 1);
-  _floorRaycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
-  const floorY = activeCharacter.getFootY();
-  const origin = _floorRaycaster.ray.origin;
-  const dir = _floorRaycaster.ray.direction;
-  if (Math.abs(dir.y) < 1e-5) return null; // 床とほぼ平行な視線では交点が求まらない
-  const t = (floorY - origin.y) / dir.y;
-  if (t <= 0.05) return null; // 交点がカメラの後ろ、あるいは極端に近すぎる(=上向きの視線)
-  return origin.clone().addScaledVector(dir, t);
-}
-
-/**
- * タップされた床の位置へキャラクターを再配置する。footYは変化しない
- * (x/zの平行移動のみで、rotation/scaleは変えないため)ので、
- * 常に「今の接地の高さ」を保ったまま位置だけを移せる。
- */
-function placeCharacterAtScreenPoint(clientX, clientY) {
-  const hit = computeFloorPointFromScreen(clientX, clientY);
-  if (!hit) {
-    showPoseToast('その場所には配置できません');
-    return;
-  }
-  placement.x = hit.x;
-  placement.z = hit.z;
-  applyPlacement();
-  showPoseToast('この場所に配置しました');
-}
-
 stage.addEventListener('touchstart', (e) => {
   e.preventDefault();
   if (e.touches.length === 1) {
     touchState.mode = 'drag';
     touchState.lastX = e.touches[0].clientX; touchState.lastY = e.touches[0].clientY;
-    // タップ判定用: 1本指シーケンスの開始時点の情報を記録する。
-    touchState.startX = e.touches[0].clientX;
-    touchState.startY = e.touches[0].clientY;
-    touchState.startTime = Date.now();
     touchState.hadMultiTouch = false;
     if (placementMode) {
       // レティクルのドラッグ変換係数は、ドラッグ開始時点の距離で固定する
@@ -749,25 +779,12 @@ stage.addEventListener('touchmove', (e) => {
 
 stage.addEventListener('touchend', (e) => {
   e.preventDefault();
-  if (touchState.mode === 'drag' && !touchState.hadMultiTouch && e.changedTouches.length > 0) {
-    const t = e.changedTouches[0];
-    const movedPx = Math.hypot(t.clientX - touchState.startX, t.clientY - touchState.startY);
-    const elapsedMs = Date.now() - touchState.startTime;
-    if (movedPx <= TAP_MAX_MOVE_PX && elapsedMs <= TAP_MAX_DURATION_MS && !placementMode) {
-      placeCharacterAtScreenPoint(t.clientX, t.clientY);
-    }
-  }
   if (e.touches.length === 0) touchState.mode = null;
   else if (e.touches.length === 1) {
     touchState.mode = 'drag';
     touchState.lastX = e.touches[0].clientX; touchState.lastY = e.touches[0].clientY;
   }
 }, { passive: false });
-
-resetBtn.addEventListener('click', () => {
-  Object.assign(placement, DEFAULT_PLACEMENT);
-  applyPlacement();
-});
 
 /* ============================================================
    セルフタイマー
@@ -785,41 +802,6 @@ timerBtn.addEventListener('click', () => {
   updateTimerBtnLabel();
 });
 updateTimerBtnLabel();
-
-/* ============================================================
-   アングル(フレーミング)切替
-   ============================================================ */
-const FRAMING_PRESETS = {
-  full:  { label: '全身',     camZ: 0,    camY: 0 },
-  half:  { label: '上半身',   camZ: -1.3, camY: 0.3 },
-  close: { label: '顔アップ', camZ: -2.3, camY: 0.7 },
-};
-let currentFramingKey = 'full';
-function applyFraming(key) {
-  const p = FRAMING_PRESETS[key];
-  if (!p) return;
-  currentFramingKey = key;
-  camera.position.z = p.camZ;
-  camera.position.y = p.camY;
-  applyPlacement();
-}
-function buildFramingBar() {
-  framingBar.innerHTML = '';
-  const buttons = {};
-  Object.entries(FRAMING_PRESETS).forEach(([key, p]) => {
-    const btn = document.createElement('button');
-    btn.className = 'framing-btn' + (key === currentFramingKey ? ' active' : '');
-    btn.textContent = p.label;
-    btn.addEventListener('click', () => {
-      applyFraming(key);
-      Object.values(buttons).forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-    });
-    buttons[key] = btn;
-    framingBar.appendChild(btn);
-  });
-}
-buildFramingBar();
 
 function runCountdown(seconds) {
   return new Promise((resolve) => {
@@ -1027,6 +1009,43 @@ shareBtn.addEventListener('click', async () => {
 });
 
 /* ============================================================
+   推しの選び直し(旧: 位置/向きのリセット)
+   ------------------------------------------------------------
+   2026/08変更: リセットボタン(#reset-btn、旧⟲「リセット」)の挙動を
+   「配置を初期値に戻す」から「キャラクター選択画面に戻る」へ変更した。
+   現在のキャラクターを解放(disposeCharacter)し、配置・カメラ位置・
+   影の手動オーバーライド等をすべて初期状態に戻したうえで、
+   キャラクターが複数登録されている場合は選択カルーセルを再表示する
+   (1体しか登録されていない場合は選択画面を出す意味が無いため、
+   同じキャラクターをそのまま再読み込みする)。
+
+   選択画面のカードは既にappStarted判定込みで「タップ即読み込み」に
+   対応させてあるため(initCharacterSelect参照)、ここでは画面を
+   表示するだけでよい。
+   ============================================================ */
+function returnToCharacterSelect() {
+  if (activeCharacter) {
+    disposeCharacter(activeCharacter, scene);
+    activeCharacter = null;
+  }
+  endPlacementMode();
+  resultScreen.classList.remove('show');
+  Object.assign(placement, DEFAULT_PLACEMENT);
+  groundEstimator.setGroundHeight(DEFAULT_PLACEMENT.y);
+  camera.position.set(0, 0, 0);
+  shadowControls && shadowControls.close();
+
+  if (CHARACTERS.length <= 1) {
+    loadingOverlay.classList.remove('hide');
+    loadingText.textContent = '推しを読み込み中…';
+    loadCharacter(CHARACTERS[0]);
+    return;
+  }
+  selectScreen.style.display = 'flex';
+}
+resetBtn.addEventListener('click', returnToCharacterSelect);
+
+/* ============================================================
    待機モーション(20260721ポージング指示書 + 補足指示)
    ------------------------------------------------------------
    ユーザー操作が30秒以上ない場合、既存のwaveポーズ+wink表情、
@@ -1105,6 +1124,15 @@ function initCharacterSelect() {
     slide.querySelector('.char-pick-btn').addEventListener('click', () => {
       currentCharacterIndex = i;
       selectScreen.style.display = 'none';
+      // 2026/08追加: スタート画面(許可フロー)を既に完走済みなら
+      // (=推しの選び直しでこの画面に戻ってきた場合)、そのまま直接
+      // 選んだキャラクターを読み込む。初回起動時はstart-btnの
+      // ハンドラ側でloadCharacterが呼ばれるため、ここでは何もしない。
+      if (appStarted) {
+        loadingOverlay.classList.remove('hide');
+        loadingText.textContent = '推しを読み込み中…';
+        loadCharacter(def);
+      }
     });
     characterList.appendChild(slide);
 
@@ -1162,6 +1190,9 @@ startBtn.addEventListener('click', async () => {
     startScreen.style.display = 'none';
     loadCharacter(CHARACTERS[currentCharacterIndex]);
     environmentLighting.start();
+    // このフラグが立った以降、resetBtn(推しを選び直す)経由での
+    // 再選択はstart-screen(許可フロー)を経由せず直接読み込む。
+    appStarted = true;
   } catch (err) {
     // エラーメッセージは startCamera 内で表示済み
   }

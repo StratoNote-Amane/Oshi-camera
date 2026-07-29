@@ -12,6 +12,16 @@
      呼び出し履歴を外部が推測しなくて済むようにするため)。
    - loadCharacter(): MMD読み込み成功時に castShadow=true を付与
      (PATCH_NOTES.md記載のShadowRig統合手順、ADR-014)。
+
+   2026/08 更新:
+   - GLOBAL_OFFSET_BONES/DEFAULT/PARAMSに pointYaw/pointPitch を追加。
+     「指差し」ポーズ(poses.thinking)で指す方向を微調整したいという
+     要望に対応するもので、右腕/右ひじへ加算する専用オフセットとして
+     実装した。既存のbodyYaw等と同じ仕組み(ポーズのbase値+オフセット、
+     ポーズ切替で自動的に0へ戻る)に相乗りしているため、character.js
+     本体のロジックには変更を加えていない(定数テーブルへの追記のみ)。
+     main.js側は「指差し」ポーズ選択中だけ専用スライダーパネルを表示し、
+     それ以外のポーズでは0にリセットして見た目に影響しないようにする。
    ============================================================ */
 import * as THREE from 'three';
 
@@ -32,10 +42,14 @@ const GLOBAL_OFFSET_BONES = {
   bodyPitch: [{ bone: '上半身', axis: 'x', weight: 1.0 }],
   headYaw:   [{ bone: '首', axis: 'y', weight: 0.45 }, { bone: '頭', axis: 'y', weight: 0.55 }],
   headRoll:  [{ bone: '頭', axis: 'z', weight: 1.0 }],
+  // 「指差し」ポーズ専用: 指す方向(右腕/右ひじ)の微調整。
+  // 他のポーズでは値が常に0のままなので見た目に影響しない。
+  pointYaw:   [{ bone: '右腕', axis: 'y', weight: 1.0 }],
+  pointPitch: [{ bone: '右腕', axis: 'x', weight: 1.0 }, { bone: '右ひじ', axis: 'x', weight: 0.4 }],
 };
 const GLOBAL_OFFSET_BONE_NAMES = new Set();
 Object.values(GLOBAL_OFFSET_BONES).forEach((arr) => arr.forEach((m) => GLOBAL_OFFSET_BONE_NAMES.add(m.bone)));
-const GLOBAL_OFFSET_DEFAULT = { bodyYaw: 0, bodyPitch: 0, headYaw: 0, headRoll: 0 };
+const GLOBAL_OFFSET_DEFAULT = { bodyYaw: 0, bodyPitch: 0, headYaw: 0, headRoll: 0, pointYaw: 0, pointPitch: 0 };
 
 // UI(pose-ui.js)がスライダーを自動生成するための一覧。可動域(range)は
 // 度数、±rangeがスライダーのmin/max。実機で狭すぎ/広すぎればここだけ調整すればよい。
@@ -44,6 +58,8 @@ export const GLOBAL_OFFSET_PARAMS = [
   { key: 'bodyPitch', label: '体の傾き', range: 15 },
   { key: 'headYaw', label: '顔の向き', range: 25 },
   { key: 'headRoll', label: '首かしげ', range: 20 },
+  { key: 'pointYaw', label: '指す方向(左右)', range: 30 },
+  { key: 'pointPitch', label: '指す方向(上下)', range: 25 },
 ];
 
 export class MMDCharacter {
@@ -75,9 +91,10 @@ export class MMDCharacter {
     Object.values(this.poses).forEach((p) => {
       Object.keys(p.bones || {}).forEach((n) => this.allPosableBones.add(n));
     });
-    // 全体オフセット対象のボーン(上半身/下半身/首/頭)は、個別のポーズプリセットに
-    // 数値が定義されていなくても常に回転対象に含めておく(そうしないとオフセットを
-    // 与えても何も動かないボーンが出てしまう)。
+    // 全体オフセット対象のボーン(上半身/下半身/首/頭/右腕/右ひじ)は、
+    // 個別のポーズプリセットに数値が定義されていなくても常に回転対象に
+    // 含めておく(そうしないとオフセットを与えても何も動かないボーンが
+    // 出てしまう)。
     GLOBAL_OFFSET_BONE_NAMES.forEach((n) => this.allPosableBones.add(n));
     this.poseTargets = {};
     this.poseCurrent = {};
@@ -133,7 +150,7 @@ export class MMDCharacter {
     this.wiggle = preset.wiggle ? { ...preset.wiggle, forPose: key } : null;
     this.centerOffsetTarget = preset.centerOffset ? { ...preset.centerOffset } : { x: 0, y: 0, z: 0 };
     // ポーズを切り替えたら全体オフセットは自動的に0へ戻す(「その場限りの調整」という
-    // 設計のため。前のポーズ用に合わせた傾きを次のポーズへ持ち越さない)。
+    // 設計のため。前のポーズ用に合わせた傾き・指す方向を次のポーズへ持ち越さない)。
     this.globalOffset = { ...GLOBAL_OFFSET_DEFAULT };
   }
   // ポーズ調整モードから直接呼ぶ：即座に反映したいのでtargetとcurrentの両方を書き換える
@@ -142,13 +159,14 @@ export class MMDCharacter {
     this.poseCurrent[name] = [...xyz];
   }
   /**
-   * 全体オフセット（体の向き/傾き・顔の向き/首かしげ）を1パラメータ分更新する。
-   * @param {'bodyYaw'|'bodyPitch'|'headYaw'|'headRoll'} key
+   * 全体オフセット（体の向き/傾き・顔の向き/首かしげ・指す方向）を
+   * 1パラメータ分更新する。
+   * @param {'bodyYaw'|'bodyPitch'|'headYaw'|'headRoll'|'pointYaw'|'pointPitch'} key
    * @param {number} degValue 度数
-   * 注意: 上半身/下半身/首/頭の4ボーンにのみ影響する。ポーズ調整モード(setBoneDelta)
-   * でこの4ボーンを個別に調整済みの場合、こちらを操作すると上書きされる。
-   * (js/idle-motion.jsは、'bodyYaw'が脚のボーンに一切影響しないことを利用して
-   * 「足を動かさない上半身の揺れ」待機モーションを実装している)
+   * 注意: pointYaw/pointPitchは右腕/右ひじにのみ影響するため、実質的には
+   * 「指差し」ポーズ(poses.thinking)選択中にのみ意味のある調整になる。
+   * 他のポーズでも技術的には呼び出せるが、main.js側は「指差し」ポーズ
+   * 選択中以外は常に0を渡す運用にしている。
    */
   setGlobalOffset(key, degValue) {
     if (!(key in this.globalOffset)) return;

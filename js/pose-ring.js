@@ -1,32 +1,27 @@
-// js/pose-ring.js — v3「呼吸するカプセル」+ ドット・インジケータ(ADR-016)
+// js/pose-ring.js — 「常時表示の複数リング」方式(2026/08改訂)
 // ------------------------------------------------------------
-// v2(カプセル型スワイプ/タップセレクター)の内部実装はそのまま維持し、
-// 「今どこにいるか」を分かりやすくするため、カプセル下部に現在位置を
-// 示すドットのインジケータ(#dock-dots)を追加した。
+// 【変更の経緯】旧版はカプセル1個をcat-chipで「ポーズ⇄表情」タブ切替する
+// 方式だったが、「表情の操作がどこにあるか分からない」という声を受け、
+// カテゴリごとに専用の行を常時表示する構成へ変更した(タブ切替自体を廃止)。
 //
 // 【重要】main.js側は一切変更していない。main.jsが呼ぶ公開APIの形
 //   window.PoseRing.init(categoryList, onSelectCallback)
 //   window.PoseRing.setActive(categoryKey, itemKey)
 //   window.PoseRing.syncPosition()
 // をそのまま維持しているため、main.jsのbuildPoseRing()はこのファイルの
-// 内部実装が変わったことを一切意識せずに動く。#dock-dots要素が
-// index.html側に存在しない場合も静かに無効化されるだけで、他の動作には
-// 影響しない(既存挙動を壊さない設計)。
+// 内部実装が変わったことを一切意識せずに動く。
 //
-// 操作方法(v2から変更なし):
+// レイアウトはindex.html側の #pose-rings (空のコンテナ)へ、
+// カテゴリの数だけ行(.pose-ring-row)を動的に生成して差し込む。
+//
+// 操作方法(カテゴリごとの各行で共通):
 //   - カプセル中央を左右にスワイプ → 次/前の項目へ
 //   - 矢印(‹ ›)をタップ → 同じく次/前へ
-//   - 左端の「ポーズ/表情」タブをタップ → カテゴリを切り替え
 (function () {
   let cats = [];
-  let catIdx = 0;
   let onSelect = null;
-
-  let elChip, elLabelSpan, elPrev, elNext, elCurrent, elEmoji, elRingLabel, elDots;
-
-  function currentCat() {
-    return cats[catIdx];
-  }
+  let elRingLabel = null;
+  let rootEl = null;
 
   function showLabel(text) {
     if (!elRingLabel) return;
@@ -37,89 +32,73 @@
   }
 
   /** 現在のカテゴリの項目数に合わせてドットを作り直し、選択中の項目を光らせる。 */
-  function renderDots() {
-    if (!elDots) return;
-    const cat = currentCat();
-    elDots.innerHTML = '';
-    if (!cat || cat.items.length <= 1) return; // 1個以下ならドット自体を出さない
+  function renderDots(cat) {
+    if (!cat.dotsEl) return;
+    cat.dotsEl.innerHTML = '';
+    if (cat.items.length <= 1) return; // 1個以下ならドット自体を出さない
     cat.items.forEach((_, i) => {
       const dot = document.createElement('span');
       if (i === cat.sel) dot.classList.add('active');
-      elDots.appendChild(dot);
+      cat.dotsEl.appendChild(dot);
     });
   }
 
-  function updateActiveDot() {
-    if (!elDots) return;
-    const cat = currentCat();
-    if (!cat) return;
-    Array.from(elDots.children).forEach((dot, i) => dot.classList.toggle('active', i === cat.sel));
+  function updateActiveDot(cat) {
+    if (!cat.dotsEl) return;
+    Array.from(cat.dotsEl.children).forEach((dot, i) => dot.classList.toggle('active', i === cat.sel));
   }
 
   /**
    * 現在の項目を(必要ならスライドアニメーション付きで)表示に反映する。
+   * @param {object} cat
    * @param {'l'|'r'|null} direction スワイプ/タップの方向。nullなら
-   *   アニメーションなしで即座に反映する(初期表示・カテゴリ切替用)。
+   *   アニメーションなしで即座に反映する(初期表示用)。
    */
-  function renderCurrent(direction) {
-    const cat = currentCat();
-    if (!cat || !cat.items.length) {
-      if (elEmoji) elEmoji.textContent = '';
+  function renderCurrent(cat, direction) {
+    if (!cat.items.length) {
+      if (cat.emojiEl) cat.emojiEl.textContent = '';
       return;
     }
     const item = cat.items[cat.sel];
-    if (!elEmoji) return;
+    if (!cat.emojiEl) return;
 
     if (!direction) {
-      elEmoji.textContent = item.emoji;
+      cat.emojiEl.textContent = item.emoji;
       return;
     }
     const outClass = direction === 'l' ? 'slide-out-l' : 'slide-out-r';
-    elEmoji.classList.remove('slide-in');
-    elEmoji.classList.add(outClass);
+    cat.emojiEl.classList.remove('slide-in');
+    cat.emojiEl.classList.add(outClass);
     setTimeout(() => {
-      elEmoji.textContent = item.emoji;
-      elEmoji.classList.remove(outClass);
-      elEmoji.classList.add('slide-in');
+      cat.emojiEl.textContent = item.emoji;
+      cat.emojiEl.classList.remove(outClass);
+      cat.emojiEl.classList.add('slide-in');
     }, 120);
   }
 
-  function selectIndex(newIdx, direction) {
-    const cat = currentCat();
-    if (!cat || !cat.items.length) return;
+  function selectIndex(cat, newIdx, direction) {
+    if (!cat.items.length) return;
     const n = cat.items.length;
     newIdx = ((newIdx % n) + n) % n;
     cat.sel = newIdx;
-    renderCurrent(direction);
-    updateActiveDot();
+    renderCurrent(cat, direction);
+    updateActiveDot(cat);
     const item = cat.items[newIdx];
     showLabel(item.emoji + ' ' + item.label);
     if (typeof onSelect === 'function') onSelect(cat.key, item.key, item);
   }
 
-  function step(delta) {
-    const cat = currentCat();
-    if (!cat) return;
-    selectIndex(cat.sel + delta, delta > 0 ? 'r' : 'l');
-  }
-
-  function cycleCategory() {
-    if (cats.length < 2) return;
-    catIdx = (catIdx + 1) % cats.length;
-    if (elLabelSpan) elLabelSpan.textContent = cats[catIdx].label;
-    renderCurrent(null);
-    renderDots();
-    const cat = currentCat();
-    if (cat && cat.items.length) showLabel(cat.label + ': ' + cat.items[cat.sel].emoji + ' ' + cat.items[cat.sel].label);
+  function step(cat, delta) {
+    selectIndex(cat, cat.sel + delta, delta > 0 ? 'r' : 'l');
   }
 
   /* --- スワイプ検出 --- */
   const SWIPE_THRESHOLD_PX = 26;
-  let swipeStartX = 0;
-  let swipeActive = false;
 
-  function attachSwipe(el) {
+  function attachSwipe(el, cat) {
     if (!el) return;
+    let swipeStartX = 0;
+    let swipeActive = false;
     el.addEventListener('touchstart', (e) => {
       if (e.touches.length !== 1) return;
       swipeActive = true;
@@ -130,7 +109,7 @@
       swipeActive = false;
       const endX = (e.changedTouches && e.changedTouches[0]) ? e.changedTouches[0].clientX : swipeStartX;
       const dx = endX - swipeStartX;
-      if (Math.abs(dx) >= SWIPE_THRESHOLD_PX) step(dx < 0 ? 1 : -1);
+      if (Math.abs(dx) >= SWIPE_THRESHOLD_PX) step(cat, dx < 0 ? 1 : -1);
     }, { passive: true });
     let mouseStartX = null;
     el.addEventListener('mousedown', (e) => { mouseStartX = e.clientX; });
@@ -138,47 +117,87 @@
       if (mouseStartX == null) return;
       const dx = e.clientX - mouseStartX;
       mouseStartX = null;
-      if (Math.abs(dx) >= SWIPE_THRESHOLD_PX) step(dx < 0 ? 1 : -1);
+      if (Math.abs(dx) >= SWIPE_THRESHOLD_PX) step(cat, dx < 0 ? 1 : -1);
     });
   }
 
-  function init(categoryList, onSelectCallback) {
-    cats = categoryList.map((c) => Object.assign({ sel: 0 }, c));
-    catIdx = 0;
-    onSelect = onSelectCallback || null;
+  /** 1カテゴリ分のDOM行(ラベル・前後矢印・現在項目・ドット)を組み立てる。 */
+  function buildRow(cat) {
+    const row = document.createElement('div');
+    row.className = 'pose-ring-row';
 
-    elChip = document.getElementById('cat-chip');
-    elLabelSpan = document.getElementById('cat-label');
-    elPrev = document.getElementById('dock-prev');
-    elNext = document.getElementById('dock-next');
-    elCurrent = document.getElementById('dock-current');
-    elEmoji = document.getElementById('dock-emoji');
-    elRingLabel = document.getElementById('ring-label');
-    elDots = document.getElementById('dock-dots');
+    const label = document.createElement('span');
+    label.className = 'pose-ring-label';
+    label.textContent = cat.label;
 
-    if (elLabelSpan && cats[0]) elLabelSpan.textContent = cats[0].label;
-    if (elChip) elChip.addEventListener('click', cycleCategory);
-    if (elPrev) elPrev.addEventListener('click', () => step(-1));
-    if (elNext) elNext.addEventListener('click', () => step(1));
-    attachSwipe(elCurrent);
+    const prev = document.createElement('button');
+    prev.type = 'button';
+    prev.className = 'dock-arrow';
+    prev.setAttribute('aria-label', '前へ');
+    prev.textContent = '‹';
+    prev.addEventListener('click', () => step(cat, -1));
 
-    renderCurrent(null);
-    renderDots();
+    const current = document.createElement('div');
+    current.className = 'dock-current';
+    const emoji = document.createElement('span');
+    emoji.className = 'dock-emoji';
+    current.appendChild(emoji);
+    attachSwipe(current, cat);
+
+    const next = document.createElement('button');
+    next.type = 'button';
+    next.className = 'dock-arrow';
+    next.setAttribute('aria-label', '次へ');
+    next.textContent = '›';
+    next.addEventListener('click', () => step(cat, 1));
+
+    const dots = document.createElement('div');
+    dots.className = 'dock-dots';
+
+    row.appendChild(label);
+    row.appendChild(prev);
+    row.appendChild(current);
+    row.appendChild(next);
+    row.appendChild(dots);
+
+    cat.rowEl = row;
+    cat.emojiEl = emoji;
+    cat.dotsEl = dots;
+    return row;
   }
 
-  /** main.js以外から選択状態を外部同期したい場合用(現状呼び出し元なし、互換維持)。 */
+  /**
+   * @param {Array<{key:string,label:string,items:Array<{key:string,emoji:string,label:string}>}>} categoryList
+   * @param {(catKey:string,itemKey:string,item:object)=>void} onSelectCallback
+   */
+  function init(categoryList, onSelectCallback) {
+    cats = categoryList.map((c) => Object.assign({ sel: 0 }, c));
+    onSelect = onSelectCallback || null;
+    elRingLabel = document.getElementById('ring-label');
+    rootEl = document.getElementById('pose-rings');
+    if (!rootEl) return;
+
+    rootEl.innerHTML = '';
+    cats.forEach((cat) => {
+      rootEl.appendChild(buildRow(cat));
+      renderCurrent(cat, null);
+      renderDots(cat);
+    });
+  }
+
+  /** main.js以外から選択状態を外部同期したい場合用(互換維持)。 */
   function setActive(categoryKey, itemKey) {
     const cat = cats.find((c) => c.key === categoryKey);
     if (!cat) return;
     const idx = cat.items.findIndex((it) => it.key === itemKey);
     if (idx < 0) return;
     cat.sel = idx;
-    if (cats[catIdx] === cat) { renderCurrent(null); updateActiveDot(); }
+    renderCurrent(cat, null);
+    updateActiveDot(cat);
   }
 
-  /** v1はSVGリングの絶対位置をシャッター実測位置に合わせていたが、
-   * v2/v3はカプセルが#bottom-controlsのflexレイアウトに乗っているだけなので
-   * 位置合わせのJS計算は不要。API互換のためだけに残すno-op。 */
+  /** レイアウトがCSSのflexに任せてある(位置合わせのJS計算不要)ため、
+   * API互換のためだけに残すno-op。 */
   function syncPosition() {}
 
   window.PoseRing = { init, setActive, syncPosition };

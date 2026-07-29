@@ -17,6 +17,12 @@
    既存のDOM ID(main.js・shadow-controls-ui.js等が参照するもの)は
    CONSTRAINTS.md 4節の通り維持している。#switch-cam-btn のみ、
    カメラ切替機能自体の廃止(hinya指示)に伴い削除した。
+
+   2026/08追記(機能整理): アングル切替(全身/上半身/顔アップ)の
+   #framing-bar、ポーズ/表情のカテゴリ切替タブ(#ring-svg/#cat-chip)は
+   廃止した。ポーズと表情は#pose-ringsの中に常時2段で並ぶ構成へ変更
+   したため、切り替えタブ自体が不要になったため。影の調整パネルは
+   モデルと重なっていたため画面下部中央から側面へ移動した。
    ============================================================ */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -222,11 +228,11 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 
 /* ===== UI層 ===== */
 #ui-layer { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+/* 初回設置・再設置(再配置)モードの両方で、位置決めに集中できるよう
+   ポーズ/表情リング等の操作UIを一時的に隠す(main.js側で
+   placementMode突入時にこのクラスを付与する)。 */
 #ui-layer.placement-pending #top-controls,
-#ui-layer.placement-pending #bottom-controls,
-#ui-layer.placement-pending #cat-chip,
-#ui-layer.placement-pending #ring-label,
-#ui-layer.placement-pending #framing-bar { display: none; }
+#ui-layer.placement-pending #bottom-controls { display: none; }
 
 /* ===== 上部：常時見えるのはドック開閉トリガー1個だけ ===== */
 #top-bar {
@@ -248,9 +254,11 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 #dock-toggle.open { color: var(--gold); border-color: var(--gold-line); transform: rotate(90deg); }
 
 /* --- 「ファン・ドック」: トリガーから円弧状に展開するアイコン群 ---
-   5個の固定位置(半径112pxの1/4円弧、左向き〜下向き)へ、扇状に開く。
+   6個の固定位置(半径112pxの1/4円弧、左向き〜下向き)へ、扇状に開く。
    位置は真円の座標をあらかじめ計算しCSSへ直書きしている(CSSにsin/cosは
-   無いため)。既存main.jsの`#reticle-btn`等のIDはそのまま維持。 */
+   無いため)。既存main.jsの`#reticle-btn`等のIDはそのまま維持。
+   2026/08: アングル切替廃止に伴い浮いた運用リソースを使い、画面左上に
+   単独で置かれていたデバッグログボタンをここへ統合し6個構成にした。 */
 #top-dock {
   pointer-events: none;
   position: fixed; top: calc(var(--safe-t) + 34px); right: 38px; z-index: 52;
@@ -273,29 +281,14 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 
 #top-dock.open .fan-btn { pointer-events: auto; opacity: 1; transform: translate(var(--fx), var(--fy)) scale(1); }
 .fan-btn:nth-child(1) { --fx: -112px; --fy: 0px;    transition-delay: 0s; }
-.fan-btn:nth-child(2) { --fx: -103px; --fy: 43px;   transition-delay: .03s; }
-.fan-btn:nth-child(3) { --fx: -79px;  --fy: 79px;   transition-delay: .06s; }
-.fan-btn:nth-child(4) { --fx: -43px;  --fy: 103px;  transition-delay: .09s; }
-.fan-btn:nth-child(5) { --fx: 0px;    --fy: 112px;  transition-delay: .12s; }
+.fan-btn:nth-child(2) { --fx: -106.5px; --fy: 34.6px; transition-delay: .025s; }
+.fan-btn:nth-child(3) { --fx: -90.6px; --fy: 65.8px;  transition-delay: .05s; }
+.fan-btn:nth-child(4) { --fx: -65.8px; --fy: 90.6px;  transition-delay: .075s; }
+.fan-btn:nth-child(5) { --fx: -34.6px; --fy: 106.5px; transition-delay: .1s; }
+.fan-btn:nth-child(6) { --fx: 0px;    --fy: 112px;   transition-delay: .125s; }
 #top-dock:not(.open) .fan-btn { transition-delay: 0s !important; }
 
 .mode-chip-fan { font-size: 15px; }
-
-/* ===== アングル切替: 常時見えるラベル付き細帯(隠さない) ===== */
-#framing-bar {
-  pointer-events: auto;
-  position: relative; z-index: 46;
-  display: flex; gap: 6px; justify-content: center;
-  background: var(--glass); backdrop-filter: blur(18px);
-  border: 1px solid var(--line); border-radius: 999px; padding: 4px;
-  margin: 0 auto;
-}
-.framing-btn {
-  padding: 7px 14px; border-radius: 999px; background: none; border: none;
-  color: var(--ink-faint); font-size: 11px; letter-spacing: .03em; transition: color .15s, background .15s;
-}
-.framing-btn.active { color: var(--gold); background: var(--gold-soft); }
-.framing-btn:active { transform: scale(.94); }
 
 /* ===== フラッシュ / カウントダウン ===== */
 #flash-overlay { position: fixed; inset: 0; z-index: 260; background: #fff; opacity: 0; pointer-events: none; }
@@ -314,7 +307,7 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 }
 @keyframes countPulse { 0% { transform: scale(1.7); opacity: 0; } 30% { transform: scale(1); opacity: 1; } 100% { opacity: 1; } }
 
-/* ===== 下部：アングル帯 ＋ ポーズ/表情カプセル ＋ 呼吸するオーブ ===== */
+/* ===== 下部：ポーズ/表情リング ＋ 呼吸するオーブ ===== */
 #bottom-controls {
   display: flex; flex-direction: column; align-items: center; gap: 16px;
   padding-bottom: calc(var(--safe-b) + 24px);
@@ -322,18 +315,20 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 }
 #bottom-controls > * { pointer-events: auto; }
 
-#ring-svg {
+/* --- ポーズ/表情リング: カテゴリごとに常時1段ずつ表示するカプセル群
+   (旧: cat-chipでポーズ⇄表情をタブ切替していた方式を廃止し、
+   「表情がどこにあるか分からない」という声を受けて常時両方見せる形にした) --- */
+#pose-rings { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.pose-ring-row {
   display: flex; align-items: center; gap: 2px;
   background: var(--glass); backdrop-filter: blur(18px);
   border: 1px solid var(--line); border-radius: 999px;
-  padding: 6px; width: auto; height: auto;
+  padding: 6px 10px;
 }
-#cat-chip {
-  background: none; border: none; color: var(--ink-faint);
-  font-size: 9.5px; letter-spacing: .12em; font-weight: 600;
-  padding: 0 10px; min-width: 34px; text-align: center;
+.pose-ring-label {
+  font-size: 9.5px; letter-spacing: .1em; font-weight: 600; color: var(--ink-faint);
+  padding: 0 8px; min-width: 34px; text-align: center;
 }
-#cat-chip:active { color: var(--gold); }
 .dock-arrow {
   width: 34px; height: 34px; border-radius: 50%; background: none; border: none;
   color: var(--ink-dim); font-size: 17px; display: flex; align-items: center; justify-content: center;
@@ -351,9 +346,9 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 .dock-emoji.slide-in { animation: dockIn .22s cubic-bezier(.34,1.56,.64,1); }
 @keyframes dockIn { from { opacity: 0; transform: translateX(10px) scale(.7); } to { opacity: 1; transform: none; } }
 
-#dock-dots { display: flex; gap: 4px; justify-content: center; }
-#dock-dots span { width: 4px; height: 4px; border-radius: 50%; background: rgba(255,255,255,.2); transition: background .2s, transform .2s; }
-#dock-dots span.active { background: var(--gold); transform: scale(1.4); }
+.dock-dots { display: flex; gap: 4px; justify-content: center; margin-left: 4px; }
+.dock-dots span { width: 4px; height: 4px; border-radius: 50%; background: rgba(255,255,255,.2); transition: background .2s, transform .2s; }
+.dock-dots span.active { background: var(--gold); transform: scale(1.4); }
 
 #ring-label {
   position: fixed; left: 50%; transform: translateX(-50%) translateY(6px);
@@ -483,17 +478,19 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 /* ===============================================================
    影の向き・長さ 手動調整パネル — 「ハロー・ダイヤル」方式(ADR-016)
    ------------------------------------------------------------
-   旧v2はスライダー2本(向き/長さ)+トグルの計3操作だった。「もっと簡単に」
-   という指示を受け、円形パッドの中で指を動かすだけで向き(角度)と
-   長さ(中心からの距離)を同時に決められる1ジェスチャー方式へ変更。
-   実際の角度→シャドウ計算のマッピングはjs/shadow-controls-ui.jsが担う。
+   2026/08: 画面下部中央に置いていたところ、キャラクター本体と
+   視覚的に重なってしまうという指摘を受け、画面右側・縦方向中央へ
+   移動した(モデルは通常フレーム中央付近に立たせるため、左右の
+   どちらかへ寄せれば重なりにくい)。
    =============================================================== */
 #shadow-panel {
-  display: none; position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: calc(var(--safe-b) + 14px); z-index: 250; width: min(320px, calc(100vw - 24px));
+  display: none; position: fixed; right: 14px; top: 50%; transform: translateY(-50%);
+  z-index: 250; width: min(280px, calc(100vw - 24px));
   background: rgba(10,10,15,.94); backdrop-filter: blur(22px);
   border: 1px solid var(--line); border-radius: 24px;
-  padding: 18px 20px calc(20px + var(--safe-b));
+  padding: 18px 20px;
+  max-height: calc(100vh - var(--safe-t) - var(--safe-b) - 40px);
+  overflow-y: auto;
 }
 #shadow-panel.show { display: block; animation: popIn .22s cubic-bezier(.34,1.56,.64,1); }
 .shadow-panel-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: var(--gold); letter-spacing: .04em; }
@@ -536,6 +533,26 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 }
 .shadow-reset-btn:active { background: var(--glass-hi); }
 .shadow-panel-hint { font-size: 10.5px; color: var(--ink-faint); margin-top: 6px; text-align: center; line-height: 1.6; }
+
+/* ===============================================================
+   指差しポーズ 専用: 指す方向の微調整パネル(新規)
+   ------------------------------------------------------------
+   影パネルと左右対称の位置(画面左側・縦方向中央)に配置し、
+   モデル本体とは重ならないようにした。「指差し」ポーズ選択中のみ
+   main.js側で.showクラスを付与して表示する。
+   =============================================================== */
+#point-adjust-panel {
+  display: none; position: fixed; left: 14px; top: 50%; transform: translateY(-50%);
+  z-index: 250; width: min(220px, calc(100vw - 24px));
+  background: rgba(10,10,15,.94); backdrop-filter: blur(22px);
+  border: 1px solid var(--line); border-radius: 20px;
+  padding: 16px 18px;
+}
+#point-adjust-panel.show { display: block; animation: popIn .22s cubic-bezier(.34,1.56,.64,1); }
+.point-adjust-head { font-size: 12.5px; font-weight: 600; color: var(--gold); letter-spacing: .04em; margin-bottom: 12px; }
+.point-adjust-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.point-adjust-row label { font-size: 11.5px; color: var(--ink-dim); width: 32px; flex-shrink: 0; }
+.point-adjust-row input[type="range"] { flex: 1; accent-color: var(--gold); }
 
 /* ===== 共有クラス(ポーズ調整パネル等、dev.htmlでも流用) ===== */
 .pose-panel-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--gold); letter-spacing: .04em; }

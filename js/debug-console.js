@@ -5,8 +5,15 @@
    実機iPhone単体でconsole.log/warn/errorの内容を確認・コピーできる
    ようにするための汎用オンスクリーンコンソール。
 
-   2026/07: AR精度検証セッション専用だった3つのクイックボタン
-   (投影チェック/環境情報/距離較正)は検証完了に伴い撤去した。
+   2026/08更新: これまでは画面左上に単独の🐛ボタンを自前で生成して
+   いたが、「デバッグ用のボタンは右上のボタン一覧(ファン・ドック)に
+   集約してほしい」という指示を受け、externalToggleオプションを追加
+   した。trueの場合は自前のトグルボタンをDOMへ追加せず、パネルの
+   開閉はcreateDebugConsole()の戻り値(show/hide/toggle)を通じて
+   外部(main.js側のファン・ドックの「ログ」ボタン)から操作する。
+   externalToggle省略時(false)は従来通り自前のボタンを表示する
+   (dev.html等、まだこのコンソールを単体で使う場面のための後方互換)。
+
    ログ閲覧・コピー・クリアの汎用機能のみ残している。個別の診断は
    引き続きjs/diagnostics.jsがwindow.__verifyProjection() /
    window.__envAnalyzerState() / window.__runCalibration() として
@@ -28,7 +35,13 @@ function formatArg(a) {
   return String(a);
 }
 
-export function createDebugConsole() {
+/**
+ * @param {object} [options]
+ * @param {boolean} [options.externalToggle=false] trueの場合、自前の
+ *   フローティングボタンは生成しない(呼び出し側が返り値のtoggle()を
+ *   別のUI要素から呼ぶ想定)。
+ */
+export function createDebugConsole({ externalToggle = false } = {}) {
   const buffer = [];
 
   const toggleBtn = document.createElement('button');
@@ -86,7 +99,9 @@ export function createDebugConsole() {
 
   panel.append(toolbar, output, copyFeedback);
   document.body.appendChild(panel);
-  document.body.appendChild(toggleBtn);
+  if (!externalToggle) {
+    document.body.appendChild(toggleBtn);
+  }
 
   function render() {
     output.textContent = buffer.join('\n\n');
@@ -113,7 +128,9 @@ export function createDebugConsole() {
 
   function show() { panel.style.display = 'flex'; render(); }
   function hide() { panel.style.display = 'none'; }
-  toggleBtn.addEventListener('click', () => { panel.style.display === 'none' ? show() : hide(); });
+  function toggle() { panel.style.display === 'none' ? show() : hide(); }
+
+  toggleBtn.addEventListener('click', toggle);
   btnClose.addEventListener('click', hide);
   btnClear.addEventListener('click', () => { buffer.length = 0; render(); });
 
@@ -135,5 +152,5 @@ export function createDebugConsole() {
     }
   });
 
-  return { show, hide, toggle: () => (panel.style.display === 'none' ? show() : hide()) };
+  return { show, hide, toggle };
 }
