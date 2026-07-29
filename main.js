@@ -85,6 +85,17 @@ let lastBlob = null;
 // キャラクターの再読み込みだけを行う(start-screenへは戻らない)。
 let appStarted = false;
 
+// 現在読み込み済みのキャラクター(js/character.jsのMMDCharacter/SpriteCharacter)。
+// 【重要】この宣言は必ずshadowRig/shadowControls/diagnostics等の初期化より
+// 前に置くこと。initShadowControlsUI()は生成時に一度applyPlacement()を
+// 同期的に呼ぶ(手動オーバーライドの初期化のため)ため、もしactiveCharacterの
+// let宣言がそれより後にあると、applyPlacement()内でのactiveCharacter参照が
+// 「初期化前のlet変数へのアクセス」(TDZ)としてReferenceErrorになり、
+// main.js全体の実行がその場で止まってしまう(結果としてinitCharacterSelect()
+// も実行されず、キャラクター選択画面にカードが1枚も生成されないまま
+// 見た目上「選択画面が表示されない」ように見える不具合になっていた)。
+let activeCharacter = null;
+
 /* ============================================================
    three.js セットアップ
    ============================================================ */
@@ -204,9 +215,9 @@ const uiLayer = document.getElementById('ui-layer');
 
 /* ============================================================
    キャラクターの抽象化・材質調整・ロード処理は js/character.js に委譲。
+   (activeCharacter変数自体はファイル冒頭で宣言済み。理由は冒頭の
+   コメント参照)
    ============================================================ */
-let activeCharacter = null;
-
 function loadCharacter(def) {
   loadCharacterCore(def, { MMDLoader, scene }, {
     onLoad: (character) => {
