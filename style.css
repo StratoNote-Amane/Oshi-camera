@@ -1,29 +1,40 @@
 /* ============================================================
-   style.css — OshiCamera UI v2「The Void」
+   style.css — OshiCamera UI v3「Halo」
    ------------------------------------------------------------
-   設計思想: UIは主役ではない。カメラ映像とキャラクターだけが
-   主役であり、操作は「呼吸するオーブ(シャッター)」1点に集約する。
-   通常時、画面に見えるのは映像とオーブと現在のポーズ名だけ。
-   それ以外はすべて指で呼び出すまで存在しない。
+   ADR-016参照。v2「The Void」(ADR-015)がミニマルさを追求しすぎて
+   「操作がわかりにくい」というフィードバックに繋がったため、以下の
+   方針で再設計した。
 
-   ADR-015(draft)参照。既存の要素ID/クラス名はmain.js・
-   shadow-controls-ui.js・dev.html系が直接参照しているため、
-   見た目だけを変え、IDは維持している(コアロジック非破壊の原則)。
+     1. 見た目のトーンは踏襲(漆黒+金、Flowly/Altairと同じ黒×アクセント色の
+        ファミリー)。ただし要素を隠しすぎず、ラベル・輪郭・動きで
+        「何を押すと何が起きるか」を常に示す。
+     2. 円(orbit/halo)を全体の統一モチーフにする。シャッター、
+        キャラクターバッジ、影の調整パッド、ドックの展開、ローディングの
+        すべてに同じ「軌道の光」のビジュアル言語を使う。
+     3. アニメーションは意味のある場所に絞って積極導入する
+        (ドックの展開、選択画面の切替、シャッターの発光、結果画面の登場)。
+
+   既存のDOM ID(main.js・shadow-controls-ui.js等が参照するもの)は
+   CONSTRAINTS.md 4節の通り維持している。#switch-cam-btn のみ、
+   カメラ切替機能自体の廃止(hinya指示)に伴い削除した。
    ============================================================ */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root{
-  --bg:        #06060a;
-  --ink:       #f4f1ea;
-  --ink-dim:   rgba(244,241,234,.56);
-  --ink-faint: rgba(244,241,234,.30);
+  --bg:        #07070c;
+  --bg-elev:   #0e0e16;
+  --ink:       #f6f2ea;
+  --ink-dim:   rgba(246,242,234,.58);
+  --ink-faint: rgba(246,242,234,.30);
   --gold:      #e7b94c;
-  --gold-dim:  rgba(231,185,76,.16);
-  --glass:     rgba(14,14,18,.62);
-  --glass-hi:  rgba(255,255,255,.06);
-  --line:      rgba(255,255,255,.09);
+  --gold-soft: rgba(231,185,76,.16);
+  --gold-line: rgba(231,185,76,.45);
+  --glass:     rgba(12,12,18,.66);
+  --glass-hi:  rgba(255,255,255,.07);
+  --line:      rgba(255,255,255,.10);
   --danger:    #ff6b6b;
   --danger-dim:rgba(255,107,107,.14);
+  --theme:     var(--gold); /* 選択画面でキャラクターごとに上書きされる */
   --safe-t:    env(safe-area-inset-top, 0px);
   --safe-b:    env(safe-area-inset-bottom, 0px);
 }
@@ -38,59 +49,147 @@ html, body {
   user-select: none;
   font-variant-numeric: tabular-nums;
 }
-
 button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
 
-/* ===== 選択画面・スタート画面（共通トーン：漆黒＋余白＋一点だけ金） =====
-   重要: select-screenはstart-screenより必ず手前に来る必要がある
-   (両方ともDOM上デフォルトでdisplay:flex、JS側は「1体しかいない場合」
-   等の条件でのみ.style.display='none'を設定する設計のため、キャラクターが
-   複数いる間は起動直後に両方が同時にvisibleな状態になり得る)。
-   z-indexを同一にしてしまうと後からDOMに現れるstart-screenが上に乗り、
-   選択画面がクリックできなくなり「何を選んでも最初のキャラが起動する」
-   という回帰バグになる(2026/07 UI一新時に一度混入させ、修正済み)。 */
+/* ============================================================
+   共通の背景演出:「星屑」レイヤー(選択/開始/ローディング/結果画面で使用)
+   ============================================================ */
+.halo-field {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+}
+.halo-field::before, .halo-field::after {
+  content: ''; position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%;
+  filter: blur(60px); opacity: .35; animation: driftBlob 22s ease-in-out infinite;
+}
+.halo-field::before { background: radial-gradient(circle, var(--theme), transparent 65%); top: -20%; left: -15%; }
+.halo-field::after { background: radial-gradient(circle, var(--theme), transparent 65%); bottom: -25%; right: -15%; animation-delay: -11s; animation-direction: reverse; }
+.halo-stars { position: absolute; inset: 0; background-image:
+    radial-gradient(1.5px 1.5px at 12% 20%, rgba(255,255,255,.9), transparent),
+    radial-gradient(1.5px 1.5px at 78% 14%, rgba(255,255,255,.7), transparent),
+    radial-gradient(1px 1px at 34% 68%, rgba(255,255,255,.8), transparent),
+    radial-gradient(1.5px 1.5px at 62% 82%, rgba(255,255,255,.6), transparent),
+    radial-gradient(1px 1px at 90% 55%, rgba(255,255,255,.7), transparent),
+    radial-gradient(1px 1px at 6% 82%, rgba(255,255,255,.6), transparent);
+  animation: twinkle 4.5s ease-in-out infinite;
+}
+@keyframes driftBlob { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(4%, 6%) scale(1.08); } }
+@keyframes twinkle { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+
+@keyframes popIn { from { opacity: 0; transform: scale(.85) translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes haloSpin { to { transform: rotate(360deg); } }
+@keyframes ringPulse { 0% { transform: scale(.7); opacity: .9; } 100% { transform: scale(2.1); opacity: 0; } }
+
+/* ===== 選択画面・開始画面 ===== */
 #select-screen, #start-screen {
   position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  background: var(--bg);
-  padding: 32px;
+  background: var(--bg); overflow: hidden;
 }
+/* 重要(ADR-015教訓): 複数のフルスクリーンオーバーレイが同時にDOM上へ
+   存在しうるため、z-indexの上下関係を明示する。select-screenが常に手前。 */
 #select-screen { z-index: 550; }
 #start-screen { z-index: 500; }
-.select-card, .start-card { text-align: center; max-width: 340px; width: 100%; }
-.select-card h1, .start-card h1 {
-  font-size: 28px; font-weight: 300; letter-spacing: .12em;
-  margin-bottom: 14px; color: var(--ink);
+
+/* --- 選択画面: キャラクターカルーセル --- */
+.select-wrap { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; }
+.select-heading { position: relative; z-index: 2; text-align: center; padding: calc(var(--safe-t) + 34px) 32px 6px; }
+.select-heading h1 { font-size: 25px; font-weight: 300; letter-spacing: .14em; color: var(--ink); animation: fadeUp .5s ease-out both; }
+.select-heading p { margin-top: 8px; font-size: 12.5px; color: var(--ink-dim); font-weight: 300; letter-spacing: .02em; animation: fadeUp .5s .05s ease-out both; }
+
+#character-list.char-carousel {
+  position: relative; z-index: 2;
+  flex: 1; width: 100%;
+  display: flex; align-items: center;
+  gap: 0; padding: 0 0 8px;
+  overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
 }
-.select-card p, .start-card p {
-  font-size: 13px; line-height: 1.9; color: var(--ink-dim);
-  margin-bottom: 40px; font-weight: 300;
+#character-list.char-carousel::-webkit-scrollbar { display: none; }
+.char-slide {
+  flex: 0 0 100%; width: 100%; height: 100%;
+  scroll-snap-align: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px; padding: 0 36px;
+  opacity: .4; transform: scale(.9);
+  transition: opacity .35s ease-out, transform .35s ease-out;
 }
-#character-list { display: flex; flex-direction: column; gap: 1px; }
-.character-card {
-  display: flex; align-items: center; gap: 16px;
-  padding: 20px 6px; background: none; border: none;
-  border-top: 1px solid var(--line);
-  cursor: pointer; text-align: left;
+.char-slide.in-view { opacity: 1; transform: scale(1); }
+
+.badge-orbit { position: relative; width: 148px; height: 148px; display: flex; align-items: center; justify-content: center; }
+.badge-orbit::before {
+  content: ''; position: absolute; inset: -14px; border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--theme), transparent 40%, var(--theme) 100%);
+  opacity: .55; animation: haloSpin 7s linear infinite; -webkit-mask: radial-gradient(closest-side, transparent 78%, #000 80%); mask: radial-gradient(closest-side, transparent 78%, #000 80%);
 }
-.character-card:last-child { border-bottom: 1px solid var(--line); }
-.character-card:active { background: var(--glass-hi); }
-.character-card .thumb {
-  width: 38px; height: 38px; border-radius: 50%;
-  background: var(--gold-dim); color: var(--gold);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 17px; flex-shrink: 0;
+.badge-ring { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid rgba(255,255,255,.18); box-shadow: 0 0 40px -4px var(--theme); }
+.badge-core {
+  position: relative; width: 112px; height: 112px; border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, rgba(255,255,255,.14), rgba(255,255,255,0) 60%), var(--glass);
+  border: 1px solid var(--line); display: flex; align-items: center; justify-content: center;
+  font-size: 50px; backdrop-filter: blur(10px);
+  animation: breathe 3.6s ease-in-out infinite;
 }
-.character-card .cname { font-size: 15px; font-weight: 400; letter-spacing: .04em; }
+@keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.035); } }
+
+.char-name { font-size: 22px; font-weight: 500; letter-spacing: .05em; color: var(--ink); }
+.char-tagline { font-size: 12.5px; color: var(--ink-dim); font-weight: 300; letter-spacing: .03em; text-align: center; max-width: 240px; line-height: 1.7; }
+.char-pick-btn {
+  margin-top: 6px; appearance: none; border: 1px solid var(--theme); border-radius: 999px;
+  padding: 13px 34px; font-size: 13px; font-weight: 600; letter-spacing: .08em;
+  background: color-mix(in srgb, var(--theme) 16%, transparent); color: var(--ink);
+  transition: transform .12s, background .15s;
+}
+.char-pick-btn:active { transform: scale(.94); background: var(--theme); color: #1a1408; }
+
+.select-dots { position: relative; z-index: 2; display: flex; gap: 7px; padding-bottom: calc(var(--safe-b) + 22px); }
+.select-dots span {
+  width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.22);
+  transition: background .2s, transform .2s;
+}
+.select-dots span.active { background: var(--theme); transform: scale(1.5); }
+
+/* --- 開始画面 --- */
+.start-card { position: relative; z-index: 2; text-align: center; max-width: 340px; width: 100%; padding: 0 28px; }
+.start-orb {
+  width: 64px; height: 64px; margin: 0 auto 26px; border-radius: 50%;
+  border: 1.5px solid var(--gold-line); position: relative;
+  animation: breathe 3.4s ease-in-out infinite;
+}
+.start-orb::after { content: ''; position: absolute; inset: 8px; border-radius: 50%; background: var(--gold); opacity: .9; }
+.start-card h1 { font-size: 26px; font-weight: 300; letter-spacing: .12em; margin-bottom: 20px; animation: fadeUp .5s ease-out both; }
+.perm-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 30px; text-align: left; }
+.perm-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; border-radius: 14px; background: var(--glass-hi); border: 1px solid var(--line);
+  font-size: 12.5px; color: var(--ink-dim); letter-spacing: .02em;
+  opacity: 0; animation: fadeUp .45s ease-out forwards;
+}
+.perm-row:nth-child(1) { animation-delay: .08s; }
+.perm-row:nth-child(2) { animation-delay: .16s; }
+.perm-row:nth-child(3) { animation-delay: .24s; }
+.perm-row .perm-mark { width: 22px; height: 22px; border-radius: 50%; background: var(--gold-soft); color: var(--gold); display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+.perm-row b { color: var(--ink); font-weight: 600; }
 
 #start-btn {
   appearance: none; border: 1px solid var(--gold);
-  border-radius: 999px; padding: 16px 44px;
-  font-size: 13px; font-weight: 600; letter-spacing: .1em;
+  border-radius: 999px; padding: 16px 46px;
+  font-size: 13px; font-weight: 700; letter-spacing: .12em;
   background: transparent; color: var(--gold); cursor: pointer;
-  transition: background .2s, color .2s;
+  transition: background .2s, color .2s, transform .12s;
+  position: relative; overflow: hidden;
 }
-#start-btn:active { background: var(--gold); color: #1a1408; transform: scale(.97); }
+#start-btn::after {
+  content: ''; position: absolute; inset: 0; border-radius: 999px;
+  background: radial-gradient(circle, rgba(231,185,76,.55), transparent 70%);
+  opacity: 0; transition: opacity .25s;
+}
+#start-btn:active { transform: scale(.96); background: var(--gold); color: #1a1408; }
+#start-btn:active::after { opacity: .6; }
 .start-note { color: var(--danger); font-size: 12px; margin-top: 18px; min-height: 16px; }
 
 /* ===== 撮影ステージ ===== */
@@ -98,15 +197,14 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 #stage { position: relative; overflow: hidden; background: #000; touch-action: none; -webkit-touch-callout: none; }
 #camera-video, #three-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 #camera-video { object-fit: cover; filter: saturate(1.02) contrast(1.01); }
-#camera-video.mirror { transform: scaleX(-1); }
 #three-canvas { pointer-events: none; }
 
-/* ===== 初回設置ステップ(最小限のまま踏襲) ===== */
+/* ===== 初回設置ステップ ===== */
 #placement-intro {
   display: none; position: fixed; top: calc(var(--safe-t) + 96px); left: 50%;
   transform: translateX(-50%); z-index: 48; max-width: calc(100vw - 64px); pointer-events: none;
 }
-#placement-intro.show { display: block; }
+#placement-intro.show { display: block; animation: fadeUp .3s ease-out; }
 #placement-intro-text {
   background: var(--glass); backdrop-filter: blur(18px); border: 1px solid var(--line);
   color: var(--ink); font-size: 13px; line-height: 1.8; text-align: center; font-weight: 300;
@@ -119,7 +217,7 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
   padding: 14px 34px; font-size: 13px; font-weight: 600; letter-spacing: .06em;
   background: var(--gold); color: #1a1408; cursor: pointer;
 }
-#placement-confirm-btn.show { display: block; }
+#placement-confirm-btn.show { display: block; animation: popIn .25s ease-out; }
 #placement-confirm-btn:active { transform: translateX(-50%) scale(.95); }
 
 /* ===== UI層 ===== */
@@ -128,106 +226,103 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 #ui-layer.placement-pending #bottom-controls,
 #ui-layer.placement-pending #cat-chip,
 #ui-layer.placement-pending #ring-label,
-#ui-layer.placement-pending #ring-svg { display: none; }
+#ui-layer.placement-pending #framing-bar { display: none; }
 
-/* ===== 上部：徹底的に減らす ===== */
-#top-controls { pointer-events: none; }
+/* ===== 上部：常時見えるのはドック開閉トリガー1個だけ ===== */
 #top-bar {
   display: flex; align-items: flex-start; justify-content: flex-end;
-  padding: calc(var(--safe-t) + 14px) 16px 0; pointer-events: none;
+  padding: calc(var(--safe-t) + 14px) 18px 0; pointer-events: none;
 }
-.top-bar-left { display: none; } /* すべてドックへ統合、左側の常時表示は廃止 */
-.top-bar-right { pointer-events: auto; }
 
-/* ドックの開閉トリガー：常時見えるのはこれ1つだけ */
 #dock-toggle {
   pointer-events: auto;
-  width: 34px; height: 34px; border-radius: 50%;
+  width: 40px; height: 40px; border-radius: 50%;
   background: var(--glass); backdrop-filter: blur(14px);
   border: 1px solid var(--line); color: var(--ink-dim);
-  font-size: 15px; letter-spacing: 1px; display: flex; align-items: center; justify-content: center;
-  transition: background .15s, color .15s, transform .1s;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s, color .15s, transform .1s, border-color .15s;
 }
+#dock-toggle .dt-dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; margin: 0 1.5px; }
+#dock-toggle .dt-wrap { display: flex; }
 #dock-toggle:active { transform: scale(.9); }
-#dock-toggle.open { color: var(--gold); border-color: rgba(231,185,76,.4); }
+#dock-toggle.open { color: var(--gold); border-color: var(--gold-line); transform: rotate(90deg); }
 
-/* 折りたたみドック本体：通常は右上から下にすっと伸びる薄い帯 */
+/* --- 「ファン・ドック」: トリガーから円弧状に展開するアイコン群 ---
+   5個の固定位置(半径112pxの1/4円弧、左向き〜下向き)へ、扇状に開く。
+   位置は真円の座標をあらかじめ計算しCSSへ直書きしている(CSSにsin/cosは
+   無いため)。既存main.jsの`#reticle-btn`等のIDはそのまま維持。 */
 #top-dock {
   pointer-events: none;
-  position: fixed; top: calc(var(--safe-t) + 54px); right: 16px; z-index: 52;
-  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
-  opacity: 0; transform: translateY(-8px) scale(.97);
-  transition: opacity .18s ease-out, transform .18s ease-out;
+  position: fixed; top: calc(var(--safe-t) + 34px); right: 38px; z-index: 52;
 }
-#top-dock.open { pointer-events: auto; opacity: 1; transform: translateY(0) scale(1); }
+.fan-btn {
+  pointer-events: none;
+  position: absolute; top: 0; right: 0;
+  width: 46px; height: 46px; border-radius: 50%;
+  background: var(--glass); backdrop-filter: blur(16px);
+  border: 1px solid var(--line); color: var(--ink);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  font-size: 16px; line-height: 1;
+  opacity: 0; transform: translate(0,0) scale(.4);
+  transition: opacity .22s ease-out, transform .22s cubic-bezier(.34,1.56,.64,1), background .15s, border-color .15s;
+}
+.fan-btn .fan-label { font-size: 8px; letter-spacing: .02em; font-weight: 600; color: var(--ink-faint); }
+.fan-btn.active { color: var(--gold); border-color: var(--gold-line); background: var(--gold-soft); }
+.fan-btn.active .fan-label { color: var(--gold); }
+.fan-btn:active { transform: translate(var(--fx), var(--fy)) scale(.88) !important; }
 
-.dock-row {
-  display: flex; gap: 8px;
-  background: var(--glass); backdrop-filter: blur(18px);
-  border: 1px solid var(--line); border-radius: 999px;
-  padding: 6px;
-}
-.icon-btn {
-  pointer-events: auto;
-  width: 38px; height: 38px; border-radius: 50%;
-  background: none; border: none;
-  color: var(--ink-dim); font-size: 16px;
-  display: flex; align-items: center; justify-content: center;
-}
-.icon-btn.small { width: 26px; height: 26px; font-size: 12px; }
-.icon-btn:active { background: var(--glass-hi); }
-.icon-btn.active { color: var(--gold); background: var(--gold-dim); }
+#top-dock.open .fan-btn { pointer-events: auto; opacity: 1; transform: translate(var(--fx), var(--fy)) scale(1); }
+.fan-btn:nth-child(1) { --fx: -112px; --fy: 0px;    transition-delay: 0s; }
+.fan-btn:nth-child(2) { --fx: -103px; --fy: 43px;   transition-delay: .03s; }
+.fan-btn:nth-child(3) { --fx: -79px;  --fy: 79px;   transition-delay: .06s; }
+.fan-btn:nth-child(4) { --fx: -43px;  --fy: 103px;  transition-delay: .09s; }
+.fan-btn:nth-child(5) { --fx: 0px;    --fy: 112px;  transition-delay: .12s; }
+#top-dock:not(.open) .fan-btn { transition-delay: 0s !important; }
 
-.mode-chip {
-  pointer-events: auto;
-  padding: 9px 16px; border-radius: 999px;
-  background: var(--glass); backdrop-filter: blur(18px); border: 1px solid var(--line);
-  color: var(--ink-dim); font-size: 11.5px; letter-spacing: .04em; white-space: nowrap;
-}
-.mode-chip.video-mode { color: var(--danger); border-color: rgba(255,107,107,.3); }
-.mode-chip:active { transform: scale(.95); }
+.mode-chip-fan { font-size: 15px; }
 
-/* アングル切替：ドックの下にもう一段、控えめに */
+/* ===== アングル切替: 常時見えるラベル付き細帯(隠さない) ===== */
 #framing-bar {
-  display: flex; gap: 6px; justify-content: flex-end;
+  pointer-events: auto;
+  position: relative; z-index: 46;
+  display: flex; gap: 6px; justify-content: center;
   background: var(--glass); backdrop-filter: blur(18px);
   border: 1px solid var(--line); border-radius: 999px; padding: 4px;
-  pointer-events: auto;
+  margin: 0 auto;
 }
 .framing-btn {
-  padding: 6px 12px; border-radius: 999px; background: none; border: none;
-  color: var(--ink-faint); font-size: 11px; letter-spacing: .03em;
+  padding: 7px 14px; border-radius: 999px; background: none; border: none;
+  color: var(--ink-faint); font-size: 11px; letter-spacing: .03em; transition: color .15s, background .15s;
 }
-.framing-btn.active { color: var(--gold); background: var(--gold-dim); }
+.framing-btn.active { color: var(--gold); background: var(--gold-soft); }
 .framing-btn:active { transform: scale(.94); }
 
-/* ===== フラッシュ / カウントダウン(踏襲、トーンのみ調整) ===== */
+/* ===== フラッシュ / カウントダウン ===== */
 #flash-overlay { position: fixed; inset: 0; z-index: 260; background: #fff; opacity: 0; pointer-events: none; }
 #flash-overlay.flash { opacity: .85; transition: opacity .05s ease-out; }
 #flash-overlay.flash-out { opacity: 0; transition: opacity .3s ease-out; }
 
 #countdown-overlay {
   display: none; position: fixed; inset: 0; z-index: 255;
-  align-items: center; justify-content: center; background: rgba(0,0,0,.35); pointer-events: none;
+  align-items: center; justify-content: center; background: rgba(0,0,0,.4); pointer-events: none;
 }
 #countdown-overlay.show { display: flex; }
 #countdown-num {
-  font-size: 96px; font-weight: 200; color: var(--ink);
+  font-size: 100px; font-weight: 200; color: var(--ink);
   font-variant-numeric: tabular-nums;
   animation: countPulse .9s ease-out;
 }
-@keyframes countPulse { 0% { transform: scale(1.6); opacity: 0; } 30% { transform: scale(1); opacity: 1; } 100% { opacity: 1; } }
+@keyframes countPulse { 0% { transform: scale(1.7); opacity: 0; } 30% { transform: scale(1); opacity: 1; } 100% { opacity: 1; } }
 
-/* ===== 下部：ポーズ/表情カプセル ＋ 呼吸するオーブ ===== */
+/* ===== 下部：アングル帯 ＋ ポーズ/表情カプセル ＋ 呼吸するオーブ ===== */
 #bottom-controls {
-  display: flex; flex-direction: column; align-items: center; gap: 22px;
-  padding-bottom: calc(var(--safe-b) + 26px);
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  padding-bottom: calc(var(--safe-b) + 24px);
   pointer-events: none;
 }
+#bottom-controls > * { pointer-events: auto; }
 
-/* --- カプセル(旧cat-chip+ring-svgを統合したドックコンテナ) --- */
 #ring-svg {
-  pointer-events: auto;
   display: flex; align-items: center; gap: 2px;
   background: var(--glass); backdrop-filter: blur(18px);
   border: 1px solid var(--line); border-radius: 999px;
@@ -236,13 +331,13 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 #cat-chip {
   background: none; border: none; color: var(--ink-faint);
   font-size: 9.5px; letter-spacing: .12em; font-weight: 600;
-  padding: 0 10px; writing-mode: horizontal-tb;
-  min-width: 34px; text-align: center;
+  padding: 0 10px; min-width: 34px; text-align: center;
 }
 #cat-chip:active { color: var(--gold); }
 .dock-arrow {
   width: 34px; height: 34px; border-radius: 50%; background: none; border: none;
   color: var(--ink-dim); font-size: 17px; display: flex; align-items: center; justify-content: center;
+  transition: background .12s, color .12s;
 }
 .dock-arrow:active { background: var(--glass-hi); color: var(--gold); }
 .dock-current {
@@ -251,14 +346,18 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
   touch-action: pan-y;
 }
 .dock-emoji { font-size: 19px; transition: transform .18s ease-out, opacity .18s ease-out; }
-.dock-emoji.slide-out-l { transform: translateX(-26px); opacity: 0; }
-.dock-emoji.slide-out-r { transform: translateX(26px); opacity: 0; }
-.dock-emoji.slide-in { animation: dockIn .2s ease-out; }
-@keyframes dockIn { from { opacity: 0; transform: translateX(10px) scale(.85); } to { opacity: 1; transform: none; } }
+.dock-emoji.slide-out-l { transform: translateX(-26px) scale(.8); opacity: 0; }
+.dock-emoji.slide-out-r { transform: translateX(26px) scale(.8); opacity: 0; }
+.dock-emoji.slide-in { animation: dockIn .22s cubic-bezier(.34,1.56,.64,1); }
+@keyframes dockIn { from { opacity: 0; transform: translateX(10px) scale(.7); } to { opacity: 1; transform: none; } }
+
+#dock-dots { display: flex; gap: 4px; justify-content: center; }
+#dock-dots span { width: 4px; height: 4px; border-radius: 50%; background: rgba(255,255,255,.2); transition: background .2s, transform .2s; }
+#dock-dots span.active { background: var(--gold); transform: scale(1.4); }
 
 #ring-label {
   position: fixed; left: 50%; transform: translateX(-50%) translateY(6px);
-  bottom: calc(var(--safe-b) + 172px); z-index: 47;
+  bottom: calc(var(--safe-b) + 186px); z-index: 47;
   font-size: 12.5px; font-weight: 400; letter-spacing: .04em; color: var(--ink);
   background: var(--glass); backdrop-filter: blur(14px); border: 1px solid var(--line);
   padding: 7px 16px; border-radius: 999px; white-space: nowrap;
@@ -266,7 +365,7 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 }
 #ring-label.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* --- 呼吸するオーブ(シャッター) --- */
+/* --- 呼吸するオーブ(シャッター)＋回る光の輪 --- */
 #bottom-bar { display: flex; flex-direction: column; align-items: center; gap: 12px; pointer-events: none; }
 #shutter-status {
   font-size: 11px; color: var(--gold); background: var(--glass); backdrop-filter: blur(10px);
@@ -274,7 +373,14 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
   opacity: 0; transition: opacity .15s;
 }
 #shutter-status.show { opacity: 1; }
-#capture-row { display: flex; align-items: center; justify-content: center; pointer-events: none; }
+#capture-row { position: relative; display: flex; align-items: center; justify-content: center; pointer-events: none; width: 96px; height: 96px; }
+
+#capture-row::before {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent, var(--gold-line), transparent 60%);
+  opacity: .7; animation: haloSpin 5s linear infinite;
+  -webkit-mask: radial-gradient(closest-side, transparent 76%, #000 80%); mask: radial-gradient(closest-side, transparent 76%, #000 80%);
+}
 
 #shutter-btn {
   pointer-events: auto;
@@ -303,23 +409,33 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 #shutter-btn.recording::after { border-radius: 8px; background: var(--danger); inset: 20px; }
 @keyframes recPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,107,107,.4); } 50% { box-shadow: 0 0 0 14px rgba(255,107,107,0); } }
 
-/* シャッター発火時の一瞬の金の開花(捕獲フィードバック、JSでこのクラスを一瞬付与) */
+/* シャッター発火時: 金の開花＋波紋(nova burst)。JSでbloomクラスを一瞬付与 */
 #shutter-btn.bloom::after { animation: shutterBloom .5s ease-out; }
 @keyframes shutterBloom { 0% { background: var(--gold); } 100% { background: var(--ink); } }
+.nova-ring {
+  position: absolute; inset: 8px; border-radius: 50%;
+  border: 2px solid var(--gold); pointer-events: none;
+  animation: ringPulse .6s ease-out forwards;
+}
 
-/* ===== 撮影結果：スワイプで再撮影できる余地を持たせる ===== */
+/* ===== 撮影結果 ===== */
 #result-screen {
   display: none; position: fixed; inset: 0; z-index: 400; background: var(--bg);
   flex-direction: column; align-items: center; justify-content: center; padding: 24px; gap: 20px;
 }
 #result-screen.show { display: flex; }
+#result-screen.show #result-imgwrap { animation: resultReveal .38s cubic-bezier(.2,.9,.3,1.2) both; }
+#result-screen.show #result-actions { animation: fadeUp .4s .1s ease-out both; }
+#result-screen.show .result-hint { animation: fadeUp .4s .05s ease-out both; }
+@keyframes resultReveal { from { opacity: 0; transform: scale(.9) translateY(24px) rotate(-1deg); } to { opacity: 1; transform: none; } }
 #result-imgwrap {
-  max-width: 100%; max-height: 68vh; border-radius: 4px; overflow: hidden;
+  max-width: 100%; max-height: 62vh; border-radius: 6px; overflow: hidden;
   transition: transform .22s ease-out, opacity .22s ease-out;
+  box-shadow: 0 20px 60px -10px rgba(0,0,0,.6);
 }
 #result-imgwrap.dismissing { transform: translateY(60px); opacity: 0; }
-#result-img { display: block; max-width: 100%; max-height: 68vh; -webkit-touch-callout: default; -webkit-user-select: auto; }
-#result-video { display: none; max-width: 100%; max-height: 68vh; -webkit-touch-callout: default; }
+#result-img { display: block; max-width: 100%; max-height: 62vh; -webkit-touch-callout: default; -webkit-user-select: auto; }
+#result-video { display: none; max-width: 100%; max-height: 62vh; -webkit-touch-callout: default; }
 #result-imgwrap.video-mode #result-img { display: none; }
 #result-imgwrap.video-mode #result-video { display: block; }
 .result-hint { font-size: 12px; color: var(--ink-faint); letter-spacing: .03em; font-weight: 300; }
@@ -327,27 +443,32 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 #share-btn {
   appearance: none; border: 1px solid var(--gold); border-radius: 999px;
   background: var(--gold); color: #1a1408; padding: 13px 28px; font-size: 13px; font-weight: 600; letter-spacing: .04em;
+  transition: transform .1s;
 }
 #share-btn:active { transform: scale(.96); }
 #retake-btn {
   appearance: none; border: 1px solid var(--line); border-radius: 999px;
   background: none; color: var(--ink-dim); padding: 13px 26px; font-size: 13px; letter-spacing: .04em;
+  transition: background .12s;
 }
 #retake-btn:active { background: var(--glass-hi); }
 
 /* ===== ローディング ===== */
 #loading-overlay {
   position: fixed; inset: 0; z-index: 300; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 16px; background: rgba(6,6,10,.94);
+  align-items: center; justify-content: center; gap: 18px; background: rgba(7,7,12,.95);
 }
 #loading-overlay.hide { display: none; }
 .loading-spinner {
-  width: 28px; height: 28px; border-radius: 50%;
-  border: 2px solid rgba(244,241,234,.15); border-top-color: var(--gold);
-  animation: spin .9s linear infinite;
+  width: 44px; height: 44px; border-radius: 50%; position: relative;
 }
+.loading-spinner::before, .loading-spinner::after {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  border: 2px solid transparent;
+}
+.loading-spinner::before { border-top-color: var(--gold); border-right-color: var(--gold); animation: haloSpin .9s linear infinite; }
+.loading-spinner::after { inset: 8px; border-top-color: rgba(231,185,76,.35); animation: haloSpin 1.4s linear infinite reverse; }
 #loading-text { font-size: 12px; color: var(--ink-faint); letter-spacing: .08em; font-weight: 300; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ===== トースト ===== */
 #pose-toast {
@@ -359,26 +480,64 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 }
 #pose-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* ===== 影の向き・長さ 手動調整パネル(トーン統一のみ) ===== */
+/* ===============================================================
+   影の向き・長さ 手動調整パネル — 「ハロー・ダイヤル」方式(ADR-016)
+   ------------------------------------------------------------
+   旧v2はスライダー2本(向き/長さ)+トグルの計3操作だった。「もっと簡単に」
+   という指示を受け、円形パッドの中で指を動かすだけで向き(角度)と
+   長さ(中心からの距離)を同時に決められる1ジェスチャー方式へ変更。
+   実際の角度→シャドウ計算のマッピングはjs/shadow-controls-ui.jsが担う。
+   =============================================================== */
 #shadow-panel {
-  display: none; position: fixed; left: 12px; right: 12px;
-  bottom: calc(var(--safe-b) + 14px); z-index: 250;
-  background: rgba(10,10,14,.92); backdrop-filter: blur(20px);
-  border: 1px solid var(--line); border-radius: 20px;
-  padding: 16px 18px calc(18px + var(--safe-b)); max-height: 70vh; overflow-y: auto;
+  display: none; position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--safe-b) + 14px); z-index: 250; width: min(320px, calc(100vw - 24px));
+  background: rgba(10,10,15,.94); backdrop-filter: blur(22px);
+  border: 1px solid var(--line); border-radius: 24px;
+  padding: 18px 20px calc(20px + var(--safe-b));
 }
-#shadow-panel.show { display: block; }
-.shadow-panel-handle { width: 34px; height: 3px; border-radius: 2px; background: var(--line); margin: 0 auto 12px; }
-#shadow-panel .pose-panel-row label { width: 34px; }
-.shadow-toggle-btn {
-  margin-left: auto; padding: 7px 15px; border-radius: 999px;
-  background: var(--glass-hi); border: 1px solid var(--line); color: var(--ink); font-size: 12px; cursor: pointer;
-}
-.shadow-toggle-btn.on { background: var(--gold-dim); border-color: var(--gold); color: var(--gold); }
-.shadow-toggle-btn:active { transform: scale(.95); }
-#shadow-panel input[type="range"]:disabled { opacity: .3; }
+#shadow-panel.show { display: block; animation: popIn .22s cubic-bezier(.34,1.56,.64,1); }
+.shadow-panel-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: var(--gold); letter-spacing: .04em; }
+.shadow-panel-sub { font-size: 11px; color: var(--ink-faint); margin-bottom: 14px; line-height: 1.6; }
 
-/* ===== 共有クラス(ポーズ調整パネル等) ===== */
+.shadow-dial-wrap { display: flex; justify-content: center; margin-bottom: 14px; }
+.shadow-dial {
+  position: relative; width: 176px; height: 176px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 46%, rgba(231,185,76,.10), transparent 70%), var(--glass-hi);
+  border: 1px solid var(--line); touch-action: none;
+}
+.shadow-dial::before {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  border: 1px dashed rgba(255,255,255,.14);
+}
+.shadow-dial-center { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%; background: rgba(255,255,255,.3); }
+.shadow-dial-handle {
+  position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; margin: -15px;
+  border-radius: 50%; background: var(--gold); box-shadow: 0 0 0 6px var(--gold-soft), 0 4px 14px rgba(0,0,0,.4);
+  display: flex; align-items: center; justify-content: center; color: #1a1408; font-size: 13px;
+  transition: box-shadow .15s;
+}
+.shadow-dial.disabled .shadow-dial-handle { background: rgba(255,255,255,.25); box-shadow: none; color: rgba(0,0,0,.4); }
+.shadow-dial.disabled { opacity: .55; pointer-events: none; }
+.shadow-dial-label { position: absolute; font-size: 9.5px; color: var(--ink-faint); letter-spacing: .06em; }
+.shadow-dial-label.n { top: 8px; left: 50%; transform: translateX(-50%); }
+.shadow-dial-label.center-hint { left: 50%; top: 50%; transform: translate(-50%, 18px); font-size: 9px; }
+
+.shadow-panel-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.shadow-toggle-btn {
+  flex: 1; padding: 11px; border-radius: 12px;
+  background: var(--glass-hi); border: 1px solid var(--line); color: var(--ink); font-size: 12.5px; cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.shadow-toggle-btn.on { background: var(--gold-soft); border-color: var(--gold-line); color: var(--gold); }
+.shadow-toggle-btn:active { transform: scale(.97); }
+.shadow-reset-btn {
+  padding: 11px 16px; border-radius: 12px; background: none; border: 1px solid var(--line);
+  color: var(--ink-dim); font-size: 12px;
+}
+.shadow-reset-btn:active { background: var(--glass-hi); }
+.shadow-panel-hint { font-size: 10.5px; color: var(--ink-faint); margin-top: 6px; text-align: center; line-height: 1.6; }
+
+/* ===== 共有クラス(ポーズ調整パネル等、dev.htmlでも流用) ===== */
 .pose-panel-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--gold); letter-spacing: .04em; }
 .pose-panel-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .pose-panel-row label { font-size: 11.5px; color: var(--ink-dim); width: 18px; flex-shrink: 0; }
@@ -398,7 +557,3 @@ button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
 
 /* ===== アクセシビリティの底床 ===== */
 button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) {
-  #shutter-btn, #shutter-btn.waiting, #shutter-btn.recording { animation: none; }
-  .dock-emoji, #result-imgwrap { transition: none; }
-}

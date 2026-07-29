@@ -1,4 +1,4 @@
-// js/ui-gestures.js — UI一新(v2)で追加した挙動をまとめた上乗せレイヤー
+// js/ui-gestures.js — UI一新(v3「Halo」ADR-016)の上乗せレイヤー
 // ------------------------------------------------------------
 // このファイルはmain.jsを一切変更せずに動く。既存ボタンのIDを
 // そのまま参照し、必要なら.click()を呼ぶだけなので、AR/Three.js/MMD/
@@ -11,7 +11,7 @@
   }
 
   ready(() => {
-    /* ---- 折りたたみドックの開閉 ---- */
+    /* ---- ファン・ドックの開閉 ---- */
     const dockToggle = document.getElementById('dock-toggle');
     const dock = document.getElementById('top-dock');
     const stage = document.getElementById('stage');
@@ -28,13 +28,13 @@
       dockToggle.addEventListener('click', () => {
         dock.classList.contains('open') ? closeDock() : openDock();
       });
-      // ドック内のボタンを押したら、操作が見えた直後に自動でしまう
+      // ドック内のボタンを押したら、扇が開いた見た目のフィードバックが
+      // 見えた直後に自動でしまう(押した瞬間の一瞬の拡大演出はCSS側で処理)。
       dock.addEventListener('click', (e) => {
-        if (e.target.closest('button')) setTimeout(closeDock, 220);
+        const btn = e.target.closest('.fan-btn');
+        if (btn) setTimeout(closeDock, 260);
       });
       // カメラ映像側をタップしたら(=撮影に集中したいはず)自動でしまう。
-      // main.js側のtouchstartリスナーとは独立した別リスナーなので、
-      // 既存のドラッグ/ピンチ/タップ配置ロジックには影響しない。
       if (stage) {
         stage.addEventListener('touchstart', () => {
           if (dock.classList.contains('open')) closeDock();
@@ -72,19 +72,29 @@
         resultImgWrap.style.transform = '';
         resultImgWrap.style.opacity = '';
         if (dy >= DISMISS_THRESHOLD_PX) {
-          retakeBtn.click(); // main.js既存のイベントハンドラをそのまま起動する
+          retakeBtn.click();
         }
       });
     }
 
-    /* ---- シャッター発火時の一瞬の金の開花(視覚フィードバックのみ) ----
-       main.jsのonShutterPress()自体には手を触れず、shutter-btnのclickを
-       外側から観測して演出クラスを一瞬付与するだけ。 */
+    /* ---- シャッター発火時の演出: 金の開花 + 波紋(nova ring)が
+       中心から2つ連続して広がって消える。main.jsのonShutterPress()
+       自体には手を触れず、shutter-btnのclickを外側から観測するだけ。 ---- */
     const shutterBtn = document.getElementById('shutter-btn');
+    const captureRow = document.getElementById('capture-row');
     if (shutterBtn) {
       shutterBtn.addEventListener('click', () => {
         shutterBtn.classList.add('bloom');
         setTimeout(() => shutterBtn.classList.remove('bloom'), 520);
+        if (captureRow) {
+          for (let i = 0; i < 2; i++) {
+            const ring = document.createElement('div');
+            ring.className = 'nova-ring';
+            ring.style.animationDelay = `${i * 0.12}s`;
+            captureRow.appendChild(ring);
+            setTimeout(() => ring.remove(), 800);
+          }
+        }
       });
     }
   });

@@ -16,7 +16,10 @@
      (bg-canvasは不透明で環境[空/地面/グリッド]を描画、
       char-canvasは透明背景でキャラクターのみ描画し、CSSフィルタは
       char-canvasにのみ適用する)。マウス操作は上に重なる
-      char-canvasが受け取る。 -->
+      char-canvasが受け取る。
+     ADR-016: 本ファイル自体の構造・IDはdev.js互換のため一切変更していない。
+     見た目(dev.css/dev-scene-panel.css)のみ本番側と同じ「Halo」トーンに
+     揃えた化粧直し。 -->
 <div id="dev-viewport">
   <canvas id="bg-canvas"></canvas>
   <canvas id="char-canvas"></canvas>
@@ -48,8 +51,6 @@
     <div class="dsp-tabs">
       <button class="dsp-tab active" data-tab="env" type="button">環境</button>
       <button class="dsp-tab" data-tab="grade" type="button">色調</button>
-      <!-- 新規追加: 距離較正ツール用タブ(calibration-tool.js、dev.jsから
-           #dsp-tab-calib を参照して中身を構築する) -->
       <button class="dsp-tab" data-tab="calib" type="button">検証</button>
     </div>
     <div id="dsp-tab-env" class="dsp-tab-content active"></div>

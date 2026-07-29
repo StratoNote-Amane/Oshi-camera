@@ -9,6 +9,12 @@
    ポーズプリセット。値は「たたき台」であり、実機/開発者モードでの
    調整を前提にしている。
 
+   2026/08追記(ADR-016「Halo」): `themeColor`(選択画面の光彩・強調色)と
+   `tagline`(選択画面のキャッチコピー)を追加した。どちらもUI表示専用の
+   追加メタデータであり、ポーズ/表情/ボーン定義には一切影響しない
+   (MMDCharacter/PoseController等は未知のキーを無視するため安全な
+   追加)。未指定の場合main.js側で既定値(金色/汎用コピー)にフォールバックする。
+
    2026/07/22 更新（20260721ポージング指示書 反映）:
    - wave: 実測値を反映。あわせて「手首から動くのではなく、手首の
      反対（ひじ）を動かす」という指示に合わせ、wiggle(常時の手振り
@@ -25,6 +31,8 @@ export const CHARACTERS = [
     id: 'kanata',
     name: '天音かなた',
     thumb: '⭐',
+    themeColor: '#7dd8ff',
+    tagline: '一緒に、素敵な瞬間を。',
     type: 'mmd',
     path: 'assets/kanata/kanata.pmx',
     unitToMeter: 0.081,
@@ -37,10 +45,7 @@ export const CHARACTERS = [
     },
     blinkMorph: 'まばたき',
     poses: {
-      // 完全な左右対称のTHE・MMDポーズを避け、肩/腰/首にごくわずかな
-      // 非対称を入れて「自然な立ち姿」に寄せている(たたき台、要調整)
       standing: {
-        // 2026/07/12 実機調整値を反映。
         label: '直立', emoji: '🧍',
         bones: {
           '下半身': [0, 0, 3],
@@ -62,7 +67,6 @@ export const CHARACTERS = [
         centerOffset: { x: 0.3, y: 0, z: 0 },
       },
       peace: {
-        // 2026/07/12 実機調整値を反映(全ボーンを実測値に置き換え)。
         label: 'ピース', emoji: '✌️',
         bones: {
           '首':    [0, -3, 9],
@@ -95,9 +99,6 @@ export const CHARACTERS = [
         centerOffset: { x: 0.4, y: 0, z: 0 },
       },
       wave: {
-        // 2026/07/22 実機フィードバック反映：「手首から動くのではなく、
-        // 手首の反対(ひじ)を動かす」指示に合わせ実測値へ全差し替え。
-        // wiggle(常時の揺れアニメーション)の対象も右手首→右ひじへ変更。
         label: '手を振る', emoji: '👋',
         bones: {
           '右肩':   [0, -5, -15],
@@ -124,7 +125,6 @@ export const CHARACTERS = [
         wiggle: { bone: '右ひじ', axis: 'y', amplitude: 15, speedHz: 1.6 },
       },
       hip: {
-        // 2026/07/22 実機フィードバック反映：用途を「腰に手」から「自撮り」へ変更。
         label: '自撮り', emoji: '🤳',
         bones: {
           '首':    [-17, -9, -6],
@@ -150,7 +150,6 @@ export const CHARACTERS = [
         },
       },
       thinking: {
-        // 2026/07/22 実機フィードバック反映：用途を「考え中」から「モノを指す」へ変更。
         label: '指差し', emoji: '👉',
         bones: {
           '右腕':   [3, 3, -74],
@@ -177,15 +176,6 @@ export const CHARACTERS = [
         },
       },
       sitting: {
-        // 2026/07/11 実機フィードバック反映：足がスカートを貫通する問題のため、
-        // 脚の開き(Z)を5→2に縮小し、内股方向へわずかにY回転を追加して脚を寄せた。
-        // 併せてひじもADR-012の発見(ヒンジはX軸でなくZ軸)に合わせて修正。
-        //
-        // 【2026/07/22時点、未対応】20260721ポージング指示書で改めて「座るときに
-        // 足がスカートを貫通する」と再報告あり。この修正は前回(07/11)一度試みた
-        // ものが実機で不十分だったことを意味するため、憶測でさらに数値を動かす
-        // のではなく、ADR-012と同じ幾何検証(fk.py等)で貫通の実測値を取ってから
-        // 対応する方針。今回は数値を変更していない。詳細は引き継ぎメモ参照。
         label: '座る', emoji: '🪑',
         bones: {
           '下半身':  [-85, 0, 0],
@@ -203,7 +193,6 @@ export const CHARACTERS = [
         centerOffset: { x: 0, y: -6.5, z: 1.0 },
       },
       lookback: {
-        // 2026/07/22 実機フィードバック反映：全ボーンを実測値に差し替え。
         label: '振り返り', emoji: '↩️',
         bones: {
           '下半身':  [21, 18, 39],
@@ -220,7 +209,6 @@ export const CHARACTERS = [
         },
       },
       doublepeace: {
-        // 2026/07/12 実機調整値を反映(全ボーンを実測値に置き換え)。
         label: '両手ピース', emoji: '✌️',
         bones: {
           '首': [0, -2, 6],
@@ -240,8 +228,6 @@ export const CHARACTERS = [
         },
       },
       fingerheart: {
-        // 2026/07/12 実機調整値を反映(全ボーンを実測値に置き換え)。
-        // 天音かなたは指示書の対象外(用途変更は音乃瀬奏のみ指定)のため維持。
         label: '指ハート', emoji: '🫰',
         bones: {
           '首': [0, 4, 5],
@@ -266,10 +252,6 @@ export const CHARACTERS = [
       },
     },
     idle: {
-      // 【2026/07/22時点、未対応】指示書にある「15秒に一度、羽根がファサファサ動く
-      // (どのポーズでも発動、モーション中は発動しない)」演出は、対象となる羽根の
-      // ボーン名が実機/PMX解析で未確認のため、憶測で追加していない。ボーン名が
-      // 分かり次第 idle.bones への追記、または専用の周期トリガー実装で対応する。
       bones: [
         { name: '上半身2', axis: 'x', amplitudeDeg: 0.8, periodSec: 4.5, phase: 0 },
         { name: '下半身',  axis: 'z', amplitudeDeg: 0.5, periodSec: 7.5, phase: 1.2 },
@@ -286,10 +268,10 @@ export const CHARACTERS = [
     id: 'kanade',
     name: '音乃瀬奏',
     thumb: '🎵',
+    themeColor: '#ff8fc0',
+    tagline: 'その音色に、寄り添って。',
     type: 'mmd',
     path: 'assets/kanade/kanade.pmx',
-    // ネイティブMMDモデルのため、kanataと同じ単位慣習の可能性が高い。
-    // それでも実機/dev.htmlでの確認は必須（ADR-005の運用方針通り）。
     unitToMeter: 0.081,
     expressions: {
       normal:    { emoji: '😐', label: '通常', weights: {} },
@@ -300,8 +282,6 @@ export const CHARACTERS = [
     },
     blinkMorph: 'まばたき',
     poses: {
-      // ボーン名がkanataと100%一致するため、無変換でそのままコピー。
-      // ただし体格差による見た目のズレは実機/dev.htmlでの再調整が必要。
       standing: {
         label: '直立', emoji: '🧍',
         bones: {
@@ -335,7 +315,6 @@ export const CHARACTERS = [
         centerOffset: { x: 0.4, y: 0, z: 0 },
       },
       wave: {
-        // 2026/07/22 実機フィードバック反映(kanataと共通、全モデル共通修正事項)。
         label: '手を振る', emoji: '👋',
         bones: {
           '右肩':   [0, -5, -15],
@@ -362,7 +341,6 @@ export const CHARACTERS = [
         wiggle: { bone: '右ひじ', axis: 'y', amplitude: 15, speedHz: 1.6 },
       },
       hip: {
-        // 2026/07/22 実機フィードバック反映：用途を「腰に手」から「自撮り」へ変更(共通)。
         label: '自撮り', emoji: '🤳',
         bones: {
           '首':    [-17, -9, -6],
@@ -388,7 +366,6 @@ export const CHARACTERS = [
         },
       },
       thinking: {
-        // 2026/07/22 実機フィードバック反映：用途を「考え中」から「モノを指す」へ変更(共通)。
         label: '指差し', emoji: '👉',
         bones: {
           '右腕':   [3, 3, -74],
@@ -415,7 +392,6 @@ export const CHARACTERS = [
         },
       },
       sitting: {
-        // 【2026/07/22時点、未対応】kanataと同様、脚貫通の再修正は幾何検証待ち。
         label: '座る', emoji: '🪑',
         bones: {
           '下半身': [-85, 0, 0],
@@ -428,7 +404,6 @@ export const CHARACTERS = [
         centerOffset: { x: 0, y: -6.5, z: 1.0 },
       },
       lookback: {
-        // 2026/07/22 実機フィードバック反映(kanataと共通)。
         label: '振り返り', emoji: '↩️',
         bones: {
           '下半身': [21, 18, 39], '上半身': [0, 54, 0], '上半身2': [14, 89, 9],
@@ -456,10 +431,6 @@ export const CHARACTERS = [
         },
       },
       fingerheart: {
-        // 2026/07/22 実機フィードバック反映：指示書により用途を「指ハート」から
-        // 「ビリヤード」へ変更(音乃瀬奏のみ指定)。キー名(fingerheart)は既存の
-        // 呼び出し側(main.js/dev.js/pose-ring等)との互換のため維持し、
-        // label/emoji/bonesのみ変更する。
         label: 'ビリヤード', emoji: '🎱',
         bones: {
           '首': [12, 62, 1],
@@ -484,8 +455,6 @@ export const CHARACTERS = [
       },
     },
     idle: {
-      // 前髪ボーンは今回のモデルの実命名(Hair_Front_A1〜D4, Hair_Ahoge)に合わせて変更。
-      // それでも振れ幅・周期は「たたき台」であり実機確認が必要。
       bones: [
         { name: '上半身2',      axis: 'x', amplitudeDeg: 0.8, periodSec: 4.5, phase: 0 },
         { name: '下半身',       axis: 'z', amplitudeDeg: 0.5, periodSec: 7.5, phase: 1.2 },

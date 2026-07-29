@@ -1,9 +1,13 @@
 /* ============================================================
-   dev.css — PC開発者モード専用のレイアウト
+   dev.css — PC開発者モード専用のレイアウト(ADR-016で見た目のみ刷新)
    ------------------------------------------------------------
-   style.cssの汎用コンポーネント(.pose-panel-*, .expr-btn, .pose-btn,
-   #pose-toastなど)はそのまま流用し、ここではdev.html固有の
-   デスクトップ向けレイアウトだけを定義する。
+   今回のADR-016では「dev.htmlも含めて改善してほしい」というhinya
+   指示を受け、以前(ADR-014/015)の「dev.htmlはスコープ外」という
+   方針を変更した(CONSTRAINTS.md 1節に追記予定)。ただし本番側と違い
+   dev.js自体(OrbitControls・較正・環境シミュレータ等のロジック)は
+   一切変更していない。既存のDOM ID/構造はそのまま維持し、配色・
+   アニメーション・ラベルの視認性のみをstyle.cssの新トークン
+   (--gold/--glass/--line等)に合わせて刷新した「化粧直し」に留めている。
    ============================================================ */
 
 body.dev-mode {
@@ -14,7 +18,7 @@ body.dev-mode:active { cursor: grabbing; }
 
 #dev-viewport {
   position: fixed; inset: 0;
-  background: #1a1d24;
+  background: #0b0b10;
   touch-action: none;
 }
 #dev-viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -29,25 +33,28 @@ body.dev-mode:active { cursor: grabbing; }
 #dev-header {
   position: fixed; top: 18px; left: 18px; z-index: 50;
   max-width: 380px; pointer-events: none;
+  animation: devFadeUp .4s ease-out both;
 }
-#dev-header h1 { font-size: 17px; color: #e7b94c; letter-spacing: .03em; margin-bottom: 4px; }
-#dev-header p { font-size: 12px; color: #b7bccb; line-height: 1.6; }
-#dev-header .dev-controls-hint { color: #8fa3be; margin-top: 4px; }
+#dev-header h1 { font-size: 17px; color: var(--gold, #e7b94c); letter-spacing: .03em; margin-bottom: 4px; }
+#dev-header p { font-size: 12px; color: var(--ink-dim, #b7bccb); line-height: 1.6; }
+#dev-header .dev-controls-hint { color: var(--ink-faint, #8fa3be); margin-top: 4px; }
 
 #dev-view-tools {
   position: fixed; top: 18px; right: 18px; z-index: 50;
   display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
-  pointer-events: none; /* 子のボタンだけをクリック可能にする(コンテナ自体はcanvasを覆わせない) */
+  pointer-events: none;
+  animation: devFadeUp .4s .05s ease-out both;
 }
 .dev-btn {
   pointer-events: auto;
-  padding: 9px 16px; border-radius: 8px;
-  background: rgba(20,22,28,.75); border: 1px solid rgba(255,255,255,.18);
+  padding: 9px 16px; border-radius: 10px;
+  background: var(--glass, rgba(20,22,28,.75)); border: 1px solid var(--line, rgba(255,255,255,.18));
   color: #fff; font-size: 12.5px; cursor: pointer; white-space: nowrap;
-  font-family: inherit;
+  font-family: inherit; transition: background .15s, transform .1s, border-color .15s;
 }
-.dev-btn:hover { background: rgba(255,255,255,.12); }
-.dev-btn.primary { background: #e7b94c; color: #1a1408; border-color: #e7b94c; font-weight: 700; }
+.dev-btn:hover { background: rgba(255,255,255,.12); border-color: rgba(231,185,76,.35); }
+.dev-btn:active { transform: scale(.96); }
+.dev-btn.primary { background: var(--gold, #e7b94c); color: #1a1408; border-color: var(--gold, #e7b94c); font-weight: 700; }
 .dev-btn.primary:hover { background: #f0c768; }
 .dev-file-btn { position: relative; overflow: hidden; text-align: center; }
 .dev-file-btn input[type="file"] {
@@ -58,31 +65,39 @@ body.dev-mode:active { cursor: grabbing; }
   position: fixed; bottom: 18px; left: 18px; right: 340px; z-index: 50;
   display: flex; flex-direction: column; gap: 8px; align-items: center;
   pointer-events: none;
+  animation: devFadeUp .4s .1s ease-out both;
 }
 #dev-bottom-bar #pose-bar,
 #dev-bottom-bar #expression-bar {
   position: static; padding: 0; pointer-events: auto;
-  background: rgba(14,16,22,.6); border-radius: 999px; padding: 8px 14px;
+  background: var(--glass, rgba(14,16,22,.6)); border-radius: 999px; padding: 8px 14px;
+  border: 1px solid var(--line, transparent);
 }
 
 #dev-tune-panel {
   position: fixed; top: 100px; right: 18px; bottom: 18px; z-index: 50;
   width: 300px;
-  background: rgba(14,16,22,.92);
-  border: 1px solid rgba(255,255,255,.15);
-  border-radius: 16px;
+  background: rgba(12,12,18,.92);
+  border: 1px solid var(--line, rgba(255,255,255,.15));
+  border-radius: 18px;
   padding: 16px;
   overflow-y: auto;
   backdrop-filter: blur(14px);
+  animation: devFadeUp .4s .15s ease-out both;
 }
-#dev-tune-panel .pose-panel-head { color: #e7b94c; font-weight: 700; margin-bottom: 14px; }
+#dev-tune-panel .pose-panel-head { color: var(--gold, #e7b94c); font-weight: 700; margin-bottom: 14px; }
 .dev-tune-note {
-  margin-top: 16px; font-size: 11px; color: #8fa3be; line-height: 1.7;
-  border-top: 1px solid rgba(255,255,255,.1); padding-top: 12px;
+  margin-top: 16px; font-size: 11px; color: var(--ink-faint, #8fa3be); line-height: 1.7;
+  border-top: 1px solid var(--line, rgba(255,255,255,.1)); padding-top: 12px;
 }
+
+@keyframes devFadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 @media (max-width: 900px) {
   #dev-tune-panel { position: fixed; top: auto; bottom: 90px; left: 18px; right: 18px; width: auto; max-height: 40vh; }
   #dev-bottom-bar { right: 18px; }
   #dev-header { max-width: calc(100vw - 36px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #dev-header, #dev-view-tools, #dev-bottom-bar, #dev-tune-panel { animation: none; }
 }

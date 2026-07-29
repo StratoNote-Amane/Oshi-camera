@@ -1,25 +1,28 @@
-// js/pose-ring.js — v2「呼吸するカプセル」型ポーズ/表情セレクター
+// js/pose-ring.js — v3「呼吸するカプセル」+ ドット・インジケータ(ADR-016)
 // ------------------------------------------------------------
-// 旧実装(扇形リング、v1)は項目数が増えると窮屈になりやすく、UI一新の
-// 一環としてカプセル型のスワイプ/タップセレクターへ全面書き換えた。
+// v2(カプセル型スワイプ/タップセレクター)の内部実装はそのまま維持し、
+// 「今どこにいるか」を分かりやすくするため、カプセル下部に現在位置を
+// 示すドットのインジケータ(#dock-dots)を追加した。
 //
 // 【重要】main.js側は一切変更していない。main.jsが呼ぶ公開APIの形
 //   window.PoseRing.init(categoryList, onSelectCallback)
 //   window.PoseRing.setActive(categoryKey, itemKey)
 //   window.PoseRing.syncPosition()
 // をそのまま維持しているため、main.jsのbuildPoseRing()はこのファイルの
-// 内部実装が変わったことを一切意識せずに動く。
+// 内部実装が変わったことを一切意識せずに動く。#dock-dots要素が
+// index.html側に存在しない場合も静かに無効化されるだけで、他の動作には
+// 影響しない(既存挙動を壊さない設計)。
 //
-// 操作方法（斬新な操作方法歓迎、との方針を反映）:
+// 操作方法(v2から変更なし):
 //   - カプセル中央を左右にスワイプ → 次/前の項目へ
-//   - 矢印(‹ ›)をタップ → 同じく次/前へ(親指1本の片手操作用フォールバック)
+//   - 矢印(‹ ›)をタップ → 同じく次/前へ
 //   - 左端の「ポーズ/表情」タブをタップ → カテゴリを切り替え
 (function () {
   let cats = [];
   let catIdx = 0;
   let onSelect = null;
 
-  let elChip, elLabelSpan, elPrev, elNext, elCurrent, elEmoji, elRingLabel;
+  let elChip, elLabelSpan, elPrev, elNext, elCurrent, elEmoji, elRingLabel, elDots;
 
   function currentCat() {
     return cats[catIdx];
@@ -31,6 +34,26 @@
     elRingLabel.classList.add('show');
     clearTimeout(elRingLabel._t);
     elRingLabel._t = setTimeout(() => elRingLabel.classList.remove('show'), 1000);
+  }
+
+  /** 現在のカテゴリの項目数に合わせてドットを作り直し、選択中の項目を光らせる。 */
+  function renderDots() {
+    if (!elDots) return;
+    const cat = currentCat();
+    elDots.innerHTML = '';
+    if (!cat || cat.items.length <= 1) return; // 1個以下ならドット自体を出さない
+    cat.items.forEach((_, i) => {
+      const dot = document.createElement('span');
+      if (i === cat.sel) dot.classList.add('active');
+      elDots.appendChild(dot);
+    });
+  }
+
+  function updateActiveDot() {
+    if (!elDots) return;
+    const cat = currentCat();
+    if (!cat) return;
+    Array.from(elDots.children).forEach((dot, i) => dot.classList.toggle('active', i === cat.sel));
   }
 
   /**
@@ -68,6 +91,7 @@
     newIdx = ((newIdx % n) + n) % n;
     cat.sel = newIdx;
     renderCurrent(direction);
+    updateActiveDot();
     const item = cat.items[newIdx];
     showLabel(item.emoji + ' ' + item.label);
     if (typeof onSelect === 'function') onSelect(cat.key, item.key, item);
@@ -84,12 +108,12 @@
     catIdx = (catIdx + 1) % cats.length;
     if (elLabelSpan) elLabelSpan.textContent = cats[catIdx].label;
     renderCurrent(null);
+    renderDots();
     const cat = currentCat();
     if (cat && cat.items.length) showLabel(cat.label + ': ' + cat.items[cat.sel].emoji + ' ' + cat.items[cat.sel].label);
   }
 
-  /* --- スワイプ検出(カプセル中央のみが対象。カメラ映像側のジェスチャーとは
-     完全に独立したDOM要素なので、main.jsの1本指ドラッグ等とは競合しない) --- */
+  /* --- スワイプ検出 --- */
   const SWIPE_THRESHOLD_PX = 26;
   let swipeStartX = 0;
   let swipeActive = false;
@@ -108,7 +132,6 @@
       const dx = endX - swipeStartX;
       if (Math.abs(dx) >= SWIPE_THRESHOLD_PX) step(dx < 0 ? 1 : -1);
     }, { passive: true });
-    // マウス操作(dev環境等)でも一応使えるようにフォールバック
     let mouseStartX = null;
     el.addEventListener('mousedown', (e) => { mouseStartX = e.clientX; });
     el.addEventListener('mouseup', (e) => {
@@ -131,6 +154,7 @@
     elCurrent = document.getElementById('dock-current');
     elEmoji = document.getElementById('dock-emoji');
     elRingLabel = document.getElementById('ring-label');
+    elDots = document.getElementById('dock-dots');
 
     if (elLabelSpan && cats[0]) elLabelSpan.textContent = cats[0].label;
     if (elChip) elChip.addEventListener('click', cycleCategory);
@@ -139,6 +163,7 @@
     attachSwipe(elCurrent);
 
     renderCurrent(null);
+    renderDots();
   }
 
   /** main.js以外から選択状態を外部同期したい場合用(現状呼び出し元なし、互換維持)。 */
@@ -148,12 +173,12 @@
     const idx = cat.items.findIndex((it) => it.key === itemKey);
     if (idx < 0) return;
     cat.sel = idx;
-    if (cats[catIdx] === cat) renderCurrent(null);
+    if (cats[catIdx] === cat) { renderCurrent(null); updateActiveDot(); }
   }
 
   /** v1はSVGリングの絶対位置をシャッター実測位置に合わせていたが、
-   * v2はカプセルが#bottom-controlsのflexレイアウトに乗っているだけなので
-   * 位置合わせのJS計算は不要になった。API互換のためだけに残す no-op。 */
+   * v2/v3はカプセルが#bottom-controlsのflexレイアウトに乗っているだけなので
+   * 位置合わせのJS計算は不要。API互換のためだけに残すno-op。 */
   function syncPosition() {}
 
   window.PoseRing = { init, setActive, syncPosition };

@@ -6,35 +6,38 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="OshiCamera">
-<meta name="theme-color" content="#06060a">
+<meta name="theme-color" content="#07070c">
 <link rel="apple-touch-icon" id="oshi-icon" href="">
-<!-- ホーム画面アイコン：呼吸するオーブ(シャッター)のモチーフをそのままアイコン化した。
-     画像ファイルを増やさず、Flowly(基礎開発/Flowly)と同じくcanvasでその場生成する方式。
-     ノービルド・追加アセット無しでの運用を維持できる(CONSTRAINTS.md準拠)。 -->
+<!-- ホーム画面アイコン(ADR-016)：Flowlyの前身であるAltair(Altair_SPA.html)の
+     アイコン生成手法(canvas上に8方向スターをグラデーション線で描き、角丸の
+     黒バッジに載せる)をそのまま踏襲し、配色のみOshiCameraのブランド色
+     (黒×金)に置き換えた。画像ファイルを追加しないノービルド方針は維持。 -->
 <script id="oshi-icon-gen">(function(){
-function drawIcon(canvas){
-  var S=canvas.width, ctx=canvas.getContext('2d'), r=S*0.22;
-  function roundedRectPath(){
-    ctx.beginPath();
-    ctx.moveTo(r,0);ctx.lineTo(S-r,0);ctx.arcTo(S,0,S,r,r);
-    ctx.lineTo(S,S-r);ctx.arcTo(S,S,S-r,S,r);
-    ctx.lineTo(r,S);ctx.arcTo(0,S,0,S-r,r);
-    ctx.lineTo(0,r);ctx.arcTo(0,0,r,0,r);ctx.closePath();
-  }
-  ctx.fillStyle='#06060a'; roundedRectPath(); ctx.fill();
-  var glow=ctx.createRadialGradient(S*0.5,S*0.46,0,S*0.5,S*0.5,S*0.62);
-  glow.addColorStop(0,'rgba(231,185,76,0.16)'); glow.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=glow; roundedRectPath(); ctx.fill();
-  var cx=S*0.5, cy=S*0.5, rOuter=S*0.225;
+function drawOshiIcon(canvas,scale){
+  var S=canvas.width, ctx=canvas.getContext('2d'), cx=S/2, cy=S/2, r=S*0.21;
+  ctx.fillStyle='#07070c';
+  ctx.beginPath();ctx.moveTo(r,0);ctx.lineTo(S-r,0);ctx.arcTo(S,0,S,r,r);
+  ctx.lineTo(S,S-r);ctx.arcTo(S,S,S-r,S,r);ctx.lineTo(r,S);ctx.arcTo(0,S,0,S-r,r);
+  ctx.lineTo(0,r);ctx.arcTo(0,0,r,0,r);ctx.closePath();ctx.fill();
   ctx.save();
-  ctx.shadowColor='#e7b94c'; ctx.shadowBlur=S*0.05;
-  ctx.strokeStyle='rgba(244,241,234,0.55)'; ctx.lineWidth=S*0.028;
-  ctx.beginPath(); ctx.arc(cx,cy,rOuter,0,Math.PI*2); ctx.stroke();
-  ctx.shadowBlur=0;
-  ctx.fillStyle='#f4f1ea'; ctx.beginPath(); ctx.arc(cx,cy,rOuter*0.62,0,Math.PI*2); ctx.fill();
+  ctx.beginPath();ctx.moveTo(r,0);ctx.lineTo(S-r,0);ctx.arcTo(S,0,S,r,r);
+  ctx.lineTo(S,S-r);ctx.arcTo(S,S,S-r,S,r);ctx.lineTo(r,S);ctx.arcTo(0,S,0,S-r,r);
+  ctx.lineTo(0,r);ctx.arcTo(0,0,r,0,r);ctx.closePath();ctx.clip();
+  var ratio=S/160; ctx.translate(cx,cy); ctx.scale(scale*ratio,scale*ratio); ctx.translate(-80,-80);
+  var pts=[[80,12],[108,52],[148,80],[108,108],[80,148],[52,108],[12,80],[52,52]];
+  function ds(ss,lw,alpha){ctx.globalAlpha=alpha;ctx.strokeStyle=ss;ctx.lineWidth=lw;ctx.lineJoin='miter';ctx.miterLimit=10;ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);for(var i=1;i<pts.length;i++)ctx.lineTo(pts[i][0],pts[i][1]);ctx.closePath();ctx.stroke();}
+  var g=ctx.createLinearGradient(12,12,148,148);
+  g.addColorStop(0,'#fff3d6');g.addColorStop(0.32,'#f0c768');g.addColorStop(0.62,'#c98f2c');g.addColorStop(1,'#ffe9ad');
+  ds(g,20,1);
+  var gs=ctx.createLinearGradient(148,148,60,60);gs.addColorStop(0,'rgba(30,16,0,0.35)');gs.addColorStop(1,'rgba(30,16,0,0)');
+  ds(gs,20,1); ds('#fff',5,0.2); ds('#fff3d6',1.5,0.45);
   ctx.restore();
+  // 中央にシャッター円(カメラアプリであることを示す小さな意匠)
+  ctx.beginPath(); ctx.arc(cx,cy,S*0.075,0,Math.PI*2);
+  ctx.fillStyle='#07070c'; ctx.fill();
+  ctx.lineWidth=S*0.012; ctx.strokeStyle='rgba(255,243,214,.8)'; ctx.stroke();
 }
-var c=document.createElement('canvas'); c.width=180; c.height=180; drawIcon(c);
+var c=document.createElement('canvas'); c.width=180; c.height=180; drawOshiIcon(c,0.72);
 var png=c.toDataURL('image/png');
 document.getElementById('oshi-icon').href=png;
 ['57','72','76','114','120','144','152','180'].forEach(function(sz){
@@ -42,25 +45,35 @@ document.getElementById('oshi-icon').href=png;
   l.setAttribute('sizes',sz+'x'+sz); l.href=png; document.head.appendChild(l);
 });
 })();</script>
-<title>推しカメラ (prototype)</title>
+<title>推しカメラ</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<!-- キャラクター選択画面 -->
+<!-- キャラクター選択画面(ADR-016): カルーセル+軌道バッジへ全面刷新 -->
 <div id="select-screen">
-  <div class="select-card">
-    <h1>推しカメラ</h1>
-    <p>一緒に撮影する推しを選んでください</p>
-    <div id="character-list"></div>
+  <div class="halo-field"><div class="halo-stars"></div></div>
+  <div class="select-wrap">
+    <div class="select-heading">
+      <h1>推しカメラ</h1>
+      <p>一緒に撮影する推しを選んでください</p>
+    </div>
+    <div id="character-list" class="char-carousel"></div>
+    <div id="select-dots" class="select-dots"></div>
   </div>
 </div>
 
 <!-- スタート画面 -->
 <div id="start-screen">
+  <div class="halo-field"><div class="halo-stars"></div></div>
   <div class="start-card">
+    <div class="start-orb"></div>
     <h1>準備OK</h1>
-    <p>カメラと「向きの検知(ジャイロ)」への<br>アクセスを許可してください。</p>
+    <div class="perm-list">
+      <div class="perm-row"><span class="perm-mark">📷</span><span><b>カメラ</b>への映像アクセス</span></div>
+      <div class="perm-row"><span class="perm-mark">🧭</span><span><b>向きの検知</b>(コンパス較正用)</span></div>
+      <div class="perm-row"><span class="perm-mark">📳</span><span><b>モーション</b>(手ぶれ検知用)</span></div>
+    </div>
     <button id="start-btn">はじめる</button>
     <p class="start-note" id="start-error"></p>
   </div>
@@ -86,31 +99,23 @@ document.getElementById('oshi-icon').href=png;
 <div id="ui-layer">
   <div id="top-controls">
     <div id="top-bar">
-      <!-- 常時見えるのはこの1個だけ。他は全てここから展開する -->
-      <div class="top-bar-right">
-        <button id="dock-toggle" aria-label="メニュー">⋯</button>
-      </div>
+      <button id="dock-toggle" aria-label="メニュー"><span class="dt-wrap"><span class="dt-dot"></span><span class="dt-dot"></span><span class="dt-dot"></span></span></button>
     </div>
   </div>
 
-  <!-- 折りたたみドック：タップで展開。既存の全機能ボタンをここに集約する -->
+  <!-- ファン・ドック: トリガーから円弧状に展開する5個のボタン。
+       カメラ切替(旧switch-cam-btn)はhinya指示によりADR-016で廃止済み。 -->
   <div id="top-dock">
-    <div id="framing-bar"></div>
-    <div class="dock-row">
-      <button id="switch-cam-btn" class="icon-btn" title="カメラ切替">⟳</button>
-      <button id="reticle-btn" class="icon-btn" title="配置/再配置">◎</button>
-      <button id="shadow-adjust-btn" class="icon-btn" title="影の向き・長さ調整">◐</button>
-      <button id="timer-btn" class="icon-btn" title="セルフタイマー">⏱</button>
-    </div>
-    <div class="dock-row">
-      <button id="mode-btn" class="mode-chip" title="写真/動画 切替">写真</button>
-      <button id="reset-btn" class="icon-btn" title="位置と向きの基準をリセット">⟲</button>
-    </div>
+    <button id="reticle-btn" class="fan-btn" title="配置/再配置"><span>◎</span><span class="fan-label">位置</span></button>
+    <button id="shadow-adjust-btn" class="fan-btn" title="影の向き・長さ調整"><span>◐</span><span class="fan-label">影</span></button>
+    <button id="timer-btn" class="fan-btn" title="セルフタイマー"><span>⏱</span><span class="fan-label">タイマー</span></button>
+    <button id="mode-btn" class="fan-btn" title="写真/動画 切替"><span class="mode-chip-fan">📷</span><span class="fan-label">写真</span></button>
+    <button id="reset-btn" class="fan-btn" title="位置と向きの基準をリセット"><span>⟲</span><span class="fan-label">リセット</span></button>
   </div>
 
   <div id="bottom-controls">
-    <!-- ポーズ/表情：カプセル1つに統合。矢印タップ、またはカプセルを
-         左右にスワイプして切り替える(js/pose-ring.js、同一の公開APIを維持) -->
+    <div id="framing-bar"></div>
+
     <div id="ring-label"></div>
     <div id="ring-svg">
       <button id="cat-chip"><span id="cat-label">ポーズ</span></button>
@@ -120,6 +125,7 @@ document.getElementById('oshi-icon').href=png;
       </div>
       <button class="dock-arrow" id="dock-next" aria-label="次へ">›</button>
     </div>
+    <div id="dock-dots"></div>
 
     <div id="bottom-bar">
       <div id="shutter-status"></div>
@@ -143,31 +149,26 @@ document.getElementById('oshi-icon').href=png;
   </div>
 </div>
 
-<!-- 影の向き・長さ 手動調整パネル -->
+<!-- 影の向き・長さ 手動調整パネル(ADR-016: ハロー・ダイヤル方式) -->
 <div id="shadow-panel">
-  <div class="shadow-panel-handle"></div>
-  <div class="pose-panel-head">
+  <div class="shadow-panel-head">
     <span>影の向き・長さ</span>
-    <button id="shadow-panel-close" class="icon-btn small">✕</button>
+    <button id="shadow-panel-close" class="dock-arrow" style="width:26px;height:26px;font-size:13px">✕</button>
   </div>
-  <div class="pose-panel-row">
-    <label>調整</label>
+  <p class="shadow-panel-sub">パッドの中で指を動かすだけで、影の向きと長さを同時に調整できます。</p>
+  <div class="shadow-dial-wrap">
+    <div class="shadow-dial disabled" id="shadow-dial">
+      <div class="shadow-dial-center"></div>
+      <div class="shadow-dial-handle" id="shadow-dial-handle">☀</div>
+      <span class="shadow-dial-label n">0°</span>
+    </div>
+  </div>
+  <p class="shadow-panel-hint" style="margin-bottom:12px">中心に近いほど影は短く、外側に近いほど長くなります</p>
+  <div class="shadow-panel-row">
     <button id="shadow-manual-toggle" class="shadow-toggle-btn">オフ(自動)</button>
+    <button id="shadow-reset-btn" class="shadow-reset-btn">自動に戻す</button>
   </div>
-  <div class="pose-panel-row slider-row">
-    <label>向き</label>
-    <input type="range" id="shadow-azimuth-slider" min="-180" max="180" step="1" value="0" disabled>
-    <span id="shadow-azimuth-val">0°</span>
-  </div>
-  <div class="pose-panel-row slider-row">
-    <label>長さ</label>
-    <input type="range" id="shadow-length-slider" min="0" max="100" step="1" value="50" disabled>
-    <span id="shadow-length-val">50</span>
-  </div>
-  <div class="pose-panel-actions">
-    <button id="shadow-reset-btn">自動に戻す</button>
-  </div>
-  <p class="pose-panel-hint">通常は環境認識による自動調整です。撮影時に影の向き・長さが不自然な場合のみ、上の「調整」をオンにして手動で直してください。</p>
+  <p class="shadow-panel-hint">通常は環境認識による自動調整です。撮影時に影が不自然な場合だけ、上のボタンをオンにして手動で直してください。</p>
 </div>
 
 <div id="pose-toast"></div>

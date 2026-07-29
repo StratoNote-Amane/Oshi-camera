@@ -23,6 +23,7 @@ let currentCharacterIndex = 0;
    ============================================================ */
 const selectScreen  = document.getElementById('select-screen');
 const characterList = document.getElementById('character-list');
+const selectDots    = document.getElementById('select-dots');
 const startScreen   = document.getElementById('start-screen');
 const startBtn      = document.getElementById('start-btn');
 const startError    = document.getElementById('start-error');
@@ -30,7 +31,6 @@ const stageWrap     = document.getElementById('stage-wrap');
 const stage         = document.getElementById('stage');
 const video         = document.getElementById('camera-video');
 const canvas        = document.getElementById('three-canvas');
-const switchCamBtn  = document.getElementById('switch-cam-btn');
 const reticleBtn    = document.getElementById('reticle-btn');
 const resetBtn      = document.getElementById('reset-btn');
 const shutterBtn    = document.getElementById('shutter-btn');
@@ -66,7 +66,12 @@ function showPoseToast(text) {
 const placement = { x: 0, y: -1.1, z: -3.2, rotY: 0, scale: 1 };
 const DEFAULT_PLACEMENT = { ...placement };
 
-let facingMode = 'environment';
+// 2026/08(ADR-016): カメラ切替機能を廃止した(hinya指示)。本アプリは
+// AR配置・接地推定・投影補正のすべてを背面カメラの画角(FOV_BY_FACING.
+// environment相当)を前提に作り込んでおり、フロントカメラ切替は
+// そもそも使用頻度が低く「ボタンが多くて分かりにくい」の一因だった。
+// facingMode/switchCamBtn/ミラー表示等、関連コードを全て削除し、
+// 常に背面カメラのみを使う構成に単純化した。
 let currentStream = null;
 let currentBlobUrl = null;
 let lastBlob = null;
@@ -91,11 +96,12 @@ const scene = new THREE.Scene();
    three.jsのPerspectiveCamera.fovは垂直画角(度)。iPhoneの背面広角
    レンズ(26mm相当)は対角画角がおよそ73〜78度、16:9クロップ時の
    垂直画角に換算すると約42〜44度になるという公開情報を根拠に42度とした。
-   フロント(TrueDepth)カメラはやや広角レンズのため40度とやや狭めに調整。
    実際のレンズ画角とはズレがあり得るため、実機で違和感があれば
-   facingMode別のこの値を直接調整すること。 */
-const FOV_BY_FACING = { environment: 42, user: 40 };
-const camera = new THREE.PerspectiveCamera(FOV_BY_FACING.environment, 1, 0.05, 100);
+   この値を直接調整すること。
+   2026/08(ADR-016): カメラ切替廃止に伴い、フロント用の40度は不要に
+   なったため削除し、単一の定数にした。 */
+const CAMERA_VERTICAL_FOV_DEG = 42;
+const camera = new THREE.PerspectiveCamera(CAMERA_VERTICAL_FOV_DEG, 1, 0.05, 100);
 camera.position.set(0, 0, 0);
 
 // トーンマッピング: 明るさが1.0を超えた部分をハードに白飛びさせず、
@@ -129,9 +135,9 @@ scene.add(rim);
 // rendererを渡すとshadowMap.enabled/typeを自動設定する。
 const shadowRig = createShadowRig(scene, { renderer, quality: 'high' });
 
-// 影の向き・長さ 手動調整パネル(20260726追加)。自動推定が撮影時に
-// 破綻した場合の保険。UIロジックはjs/shadow-controls-ui.jsに分離し、
-// main.js側は生成のみを行う(CONSTRAINTS.md モジュール分割ルール)。
+// 影の向き・長さ 手動調整パネル(ADR-016でハロー・ダイヤル方式に刷新)。
+// 自動推定が撮影時に破綻した場合の保険。UIロジックはjs/shadow-controls-ui.js
+// に分離し、main.js側は生成のみを行う(CONSTRAINTS.md モジュール分割ルール)。
 initShadowControlsUI(shadowRig);
 
 // 環境解析(GPS/太陽位置/カメラ画像解析)・投影整合性チェック・距離較正・
@@ -263,7 +269,7 @@ function applyPlacement() {
   // それ以外は従来通りlighting.jsの画像ベース推定を使う。
   let lightAzimuthDeg = environmentLighting.getEstimatedAzimuthDeg();
 
-  // 2026/08/01改訂: 当初は`environmentType === 'indoor'`かどうかで
+  // 2026/08改訂: 当初は`environmentType === 'indoor'`かどうかで
   // 方位を固定するかを判定していたが、「GPSが取れただけでoutdoorScoreが
   // 押し上げられ、実際は方向性の無い拡散光の部屋なのにenvironmentType
   // ='outdoor'になる」ケース(indoor/outdoor判定自体がまだGPS成功に
@@ -508,18 +514,20 @@ function waitForSteady() {
 
 /* ============================================================
    カメラ映像
+   ------------------------------------------------------------
+   2026/08(ADR-016): カメラ切替(前面/背面)機能を廃止したため、
+   facingModeは持たず常に背面カメラ(environment)のみを要求する。
    ============================================================ */
 async function startCamera() {
   stopCamera();
   try {
     const constraints = {
       audio: false,
-      video: { facingMode: { ideal: facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
     };
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     currentStream = stream;
     video.srcObject = stream;
-    video.classList.toggle('mirror', facingMode === 'user');
     await video.play();
     video.addEventListener('loadedmetadata', onVideoMeta, { once: true });
     if (video.videoWidth) onVideoMeta();
@@ -761,15 +769,6 @@ resetBtn.addEventListener('click', () => {
   applyPlacement();
 });
 
-switchCamBtn.addEventListener('click', async () => {
-  facingMode = facingMode === 'environment' ? 'user' : 'environment';
-  camera.fov = FOV_BY_FACING[facingMode];
-  camera.updateProjectionMatrix();
-  await startCamera();
-  environmentLighting.start();
-  diagnostics.start();
-});
-
 /* ============================================================
    セルフタイマー
    ============================================================ */
@@ -777,7 +776,8 @@ const TIMER_OPTIONS = [0, 3, 10];
 let timerIndex = 0;
 function updateTimerBtnLabel() {
   const v = TIMER_OPTIONS[timerIndex];
-  timerBtn.textContent = v === 0 ? '⏱' : `⏱${v}`;
+  const iconSpan = timerBtn.querySelector('span:first-child');
+  if (iconSpan) iconSpan.textContent = v === 0 ? '⏱' : `⏱${v}`;
   timerBtn.classList.toggle('active', v > 0);
 }
 timerBtn.addEventListener('click', () => {
@@ -854,9 +854,7 @@ function capture() {
   const out = document.createElement('canvas');
   out.width = vw; out.height = vh;
   const ctx = out.getContext('2d');
-  if (facingMode === 'user') { ctx.translate(vw, 0); ctx.scale(-1, 1); }
   ctx.drawImage(video, 0, 0, vw, vh);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.drawImage(renderer.domElement, 0, 0, vw, vh);
   applyPhotoFinish(out, { envTint: environmentLighting.getEstimatedTintColor() });
   out.toBlob((blob) => {
@@ -915,9 +913,7 @@ function recordFrameLoop() {
     recordCanvas.width = vw; recordCanvas.height = vh;
   }
   if (vw) {
-    if (facingMode === 'user') { recordCtx.save(); recordCtx.translate(vw, 0); recordCtx.scale(-1, 1); }
     recordCtx.drawImage(video, 0, 0, vw, vh);
-    if (facingMode === 'user') recordCtx.restore();
     recordCtx.drawImage(renderer.domElement, 0, 0, vw, vh);
   }
   recordLoopId = requestAnimationFrame(recordFrameLoop);
@@ -965,12 +961,19 @@ function stopVideoRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
 }
 
+function updateModeBtnLabel() {
+  const iconSpan = modeBtn.querySelector('.mode-chip-fan');
+  const labelSpan = modeBtn.querySelector('.fan-label');
+  if (iconSpan) iconSpan.textContent = isVideoMode ? '🎥' : '📷';
+  if (labelSpan) labelSpan.textContent = isVideoMode ? '動画' : '写真';
+  modeBtn.classList.toggle('active', isVideoMode);
+}
 modeBtn.addEventListener('click', () => {
   if (isRecording) return; // 録画中はモード切替させない
   isVideoMode = !isVideoMode;
-  modeBtn.textContent = isVideoMode ? '🎥 動画' : '📷 写真';
-  modeBtn.classList.toggle('video-mode', isVideoMode);
+  updateModeBtnLabel();
 });
+updateModeBtnLabel();
 
 let isCapturing = false;
 async function onShutterPress() {
@@ -1084,16 +1087,52 @@ function initCharacterSelect() {
   }
   selectScreen.style.display = 'flex';
   characterList.innerHTML = '';
+  if (selectDots) selectDots.innerHTML = '';
+
   CHARACTERS.forEach((def, i) => {
-    const card = document.createElement('div');
-    card.className = 'character-card';
-    card.innerHTML = `<div class="thumb">${def.thumb || '⭐'}</div><div class="cname">${def.name}</div>`;
-    card.addEventListener('click', () => {
+    const slide = document.createElement('div');
+    slide.className = 'char-slide' + (i === 0 ? ' in-view' : '');
+    slide.style.setProperty('--theme', def.themeColor || 'var(--gold)');
+    slide.innerHTML = `
+      <div class="badge-orbit">
+        <div class="badge-ring"></div>
+        <div class="badge-core"><span class="badge-emoji">${def.thumb || '⭐'}</span></div>
+      </div>
+      <h2 class="char-name">${def.name}</h2>
+      <p class="char-tagline">${def.tagline || '一緒に、素敵な瞬間を。'}</p>
+      <button type="button" class="char-pick-btn">この娘とはじめる</button>
+    `;
+    slide.querySelector('.char-pick-btn').addEventListener('click', () => {
       currentCharacterIndex = i;
       selectScreen.style.display = 'none';
     });
-    characterList.appendChild(card);
+    characterList.appendChild(slide);
+
+    if (selectDots) {
+      const dot = document.createElement('span');
+      if (i === 0) dot.classList.add('active');
+      selectDots.appendChild(dot);
+    }
   });
+
+  // カルーセルのスクロール位置から「今どのカードが中央にあるか」を判定し、
+  // 見出しの背景色(--theme)・ドット・カード自身の強調表示を追従させる。
+  // ネイティブのscroll-snapに任せているため、ジェスチャー処理は一切書かない。
+  let scrollRaf = null;
+  characterList.addEventListener('scroll', () => {
+    if (scrollRaf) return;
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = null;
+      const idx = Math.round(characterList.scrollLeft / characterList.clientWidth);
+      const slides = characterList.querySelectorAll('.char-slide');
+      slides.forEach((s, i) => s.classList.toggle('in-view', i === idx));
+      if (selectDots) {
+        Array.from(selectDots.children).forEach((d, i) => d.classList.toggle('active', i === idx));
+      }
+      const activeDef = CHARACTERS[idx];
+      if (activeDef) selectScreen.style.setProperty('--theme', activeDef.themeColor || '#e7b94c');
+    });
+  }, { passive: true });
 }
 initCharacterSelect();
 
